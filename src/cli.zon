@@ -1,0 +1,21 @@
+.{
+    .name = "sly",
+    .description = "Shell AI command generator",
+    .options = .{
+        .{
+            .short = 'n',
+            .long = "number",
+            .type = "u8",
+            .default = 3,
+            .description = "Number of times to print the string.",
+        },
+    },
+    .positionals = .{
+        .{
+            .meta = .STRING,
+            .type = "string",
+            .default = "All your codebase are belong to us.",
+            .description = "String to print.",
+        },
+    },
+}

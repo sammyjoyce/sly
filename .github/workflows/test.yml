@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh bash curl libcurl4-openssl-dev git
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Add binary to PATH
+        run: echo "$PWD/zig-out/bin" >> $GITHUB_PATH
+
+      - name: Smoke test CLI (echo provider)
+        env:
+          SLY_PROVIDER: echo
+        run: |
+          out="$(sly "list files")"
+          test -n "$out"
+          echo "CLI OK: $out"
+
+      - name: Smoke test zsh plugin
+        shell: bash
+        env:
+          SLY_PROVIDER: echo
+        run: |
+          cat > /tmp/test.zsh <<'ZS'
+          source lib/sly.plugin.zsh
+          BUFFER="# say hello"
+          _zig_ai_accept_line
+          [[ "$BUFFER" == "echo 'say hello'" ]]
+          ZS
+          zsh /tmp/test.zsh
+
+      - name: Smoke test bash plugin
+        shell: bash
+        env:
+          SLY_PROVIDER: echo
+        run: |
+          source lib/bash-sly.plugin.sh
+          READLINE_LINE="# date"
+          __bash_ai_expand
+          test "$READLINE_LINE" = "echo 'date'"
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - run: shellcheck lib/*.sh lib/*.zsh || true

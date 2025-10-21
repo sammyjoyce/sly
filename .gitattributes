@@ -1,0 +1,8 @@
+# Zig recommends LF line endings
+*.zig text eol=lf
+*.zon text eol=lf
+
+# GitHub linguist language detection
+*.zig linguist-language=Zig
+*.zsh linguist-language=Shell
+*.sh linguist-language=Shell

@@ -1,0 +1,31 @@
+.{
+    .name = .sly,
+    .version = "0.0.0",
+    .fingerprint = 0x4967e228dedab162, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0-dev.624+606c7bcc8",
+    .dependencies = .{
+        .argzon = .{
+            .url = "git+https://codeberg.org/tensorush/argzon.git#b4f348934b38e49213446ceef3c54032fb3dc0aa",
+            .hash = "argzon-0.5.1-Cl574kamAgBHc6Ds8x-zAqd5ith6NVHW30n_8DnHFnDP",
+        },
+        .zq = .{
+            .url = "git+https://codeberg.org/tensorush/zq.git#3bf8a875669d43ff90177d9d19a929aaf43865ba",
+            .hash = "zq-0.10.0-7XsKhbzqAAA67DKqAbRTm69zx6oDg6F0bV1doEawUq1u",
+        },
+        .liza = .{
+            .url = "git+https://codeberg.org/tensorush/liza.git#826de102a09f38aa0ba4c79bb73fa38375bf58dd",
+            .hash = "liza-0.15.0-273KGiU1AQBJZtd7CedJEGiQLQ9HFR8e2qOB7xiRQgvn",
+        },
+        .tracy = .{
+            .url = "git+https://github.com/Games-by-Mason/tracy_zig.git#1cb0471b169637ebfc0a4f5ce827a3502412e564",
+            .hash = "tracy-0.0.0-R7l8BVxEAQDC2E_f6SlQZy5_4BAI2klvP5equvriL47a",
+        },
+    },
+    .paths = .{
+        "src/",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+    },
+}

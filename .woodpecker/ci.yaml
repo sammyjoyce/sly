@@ -1,0 +1,24 @@
+when:
+  event: [push, pull_request]
+  branch: main
+
+steps:
+  run:
+    image: tensorush/ziglang:latest
+    pull: true
+
+    depends_on: [] # Enable parallel steps
+
+    commands: zig build run
+
+  test:
+    image: tensorush/ziglang:latest
+    pull: true
+
+    commands: zig build test --summary all
+
+  fmt:
+    image: tensorush/ziglang:latest
+    pull: true
+
+    commands: zig build fmt
