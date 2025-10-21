@@ -1,7 +1,6 @@
 # bash integration for the Zig binary
-# Reliable keybinding: C-x a  (avoid fragile Enter override in Readline)
 # Type:   # your request
-# Then:   press Ctrl-x a   -> buffer is replaced with the command
+# Then:   press Enter -> buffer is replaced with the command
 
 __bash_ai_expand() {
   # Only transform if line starts with "# "
@@ -18,8 +17,27 @@ __bash_ai_expand() {
       READLINE_LINE=""
       READLINE_POINT=0
     fi
+  else
+    # Normal Enter behavior
+    return 1
   fi
 }
 
-# Bind Ctrl-x a
+__bash_ai_accept_line() {
+  if [[ ${READLINE_LINE} == "# "* ]]; then
+    __bash_ai_expand
+  fi
+  # Accept the line (either original or replaced)
+  [[ -n ${READLINE_LINE} ]] && history -s "$READLINE_LINE"
+  printf '\n'
+  eval "$READLINE_LINE"
+  READLINE_LINE=""
+  READLINE_POINT=0
+}
+
+# Bind Enter to our custom handler
+bind -x '"\C-m":"__bash_ai_accept_line"'
+bind -x '"\C-j":"__bash_ai_accept_line"'
+
+# Keep Ctrl-x a as alternative trigger (for manual expansion without execution)
 bind -x '"\C-xa":"__bash_ai_expand"'

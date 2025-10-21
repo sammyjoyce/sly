@@ -5,7 +5,7 @@ Shell AI command generator - convert natural language to shell commands using AI
 ## Features
 
 - **Multiple AI providers**: Anthropic (Claude), Google (Gemini), OpenAI (GPT), Ollama (local models)
-- **Shell integration**: zsh with "# request" + Enter UX, bash with Ctrl-x a keybinding
+- **Shell integration**: Type "# request" and press Enter in both zsh and bash
 - **Context-aware**: Detects project type, git status, current directory
 - **Fast**: Written in Zig 0.15.2+ with libcurl for minimal latency
 - **Offline mode**: Echo provider for testing without API keys
@@ -110,11 +110,13 @@ Then type:
 
 ```sh
 # list all pdf files
-<press Ctrl-x a>
+# <press Enter>
 # → Buffer becomes: find . -name '*.pdf'
 ```
 
-Press Enter to execute, or edit first.
+Press Enter again to execute, or edit first.
+
+Alternative: Press `Ctrl-x a` to expand without executing.
 
 ## Development
 
