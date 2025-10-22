@@ -48,6 +48,34 @@ fn parseProvider(p: []const u8) providers.Provider {
     return .anthropic;
 }
 
+fn autoDetectProvider(alloc: std.mem.Allocator) providers.Provider {
+    // Check if provider is explicitly set
+    if (std.process.getEnvVarOwned(alloc, "SLY_PROVIDER")) |provider_env| {
+        defer alloc.free(provider_env);
+        return parseProvider(provider_env);
+    } else |_| {
+        // Auto-detect based on available API keys
+        // Priority: anthropic -> openai -> gemini -> ollama (fallback)
+        if (std.process.getEnvVarOwned(alloc, "ANTHROPIC_API_KEY")) |key| {
+            alloc.free(key);
+            return .anthropic;
+        } else |_| {}
+
+        if (std.process.getEnvVarOwned(alloc, "OPENAI_API_KEY")) |key| {
+            alloc.free(key);
+            return .openai;
+        } else |_| {}
+
+        if (std.process.getEnvVarOwned(alloc, "GEMINI_API_KEY")) |key| {
+            alloc.free(key);
+            return .gemini;
+        } else |_| {}
+
+        // Default to ollama if no API keys found (local, no key needed)
+        return .ollama;
+    }
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -73,18 +101,15 @@ pub fn main() !void {
         var stdout_buf: [4096]u8 = undefined;
         const stdout_file = std.fs.File.stdout();
         var stdout_writer = stdout_file.writer(&stdout_buf);
-        const provider_name = std.process.getEnvVarOwned(alloc, "SLY_PROVIDER") catch "anthropic";
-        defer if (!std.mem.eql(u8, provider_name, "anthropic")) alloc.free(provider_name);
+        const detected_provider = autoDetectProvider(alloc);
+        const provider_name = @tagName(detected_provider);
         try stdout_writer.interface.print("Usage: sly \"your natural language command\"\nCurrent provider: {s}\n", .{provider_name});
         try stdout_writer.interface.flush();
         return;
     }
 
-    const provider_env = try getenvOwnedOr(alloc, "SLY_PROVIDER", "anthropic");
-    defer alloc.free(provider_env);
-
     const cfg = providers.Config{
-        .provider = parseProvider(provider_env),
+        .provider = autoDetectProvider(alloc),
         .anthropic_key = getenvOwnedOpt(alloc, "ANTHROPIC_API_KEY"),
         .anthropic_model = try getenvOwnedOr(alloc, "SLY_ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
         .gemini_key = getenvOwnedOpt(alloc, "GEMINI_API_KEY"),

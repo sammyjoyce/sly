@@ -2,10 +2,10 @@
 # Provides the "# <request>" + Enter UX, replaces buffer with the command.
 
 _zig_ai_exec() {
+  setopt local_options no_monitor no_notify
   local query="$1"
   local tmp
-  tmp="$(mktemp)"
-  setopt local_options no_monitor no_notify
+  tmp="$(mktemp)" || { print -P "%F{red}❌ Failed to create temp file%f"; return 1; }
   ( sly "$query" >"$tmp" 2>/dev/null ) &
   local pid=$!
 
