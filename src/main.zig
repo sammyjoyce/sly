@@ -53,27 +53,16 @@ fn autoDetectProvider(alloc: std.mem.Allocator) providers.Provider {
     if (std.process.getEnvVarOwned(alloc, "SLY_PROVIDER")) |provider_env| {
         defer alloc.free(provider_env);
         return parseProvider(provider_env);
-    } else |_| {
-        // Auto-detect based on available API keys
-        // Priority: anthropic -> openai -> gemini -> ollama (fallback)
-        if (std.process.getEnvVarOwned(alloc, "ANTHROPIC_API_KEY")) |key| {
-            alloc.free(key);
-            return .anthropic;
-        } else |_| {}
+    } else |_| {}
 
-        if (std.process.getEnvVarOwned(alloc, "OPENAI_API_KEY")) |key| {
-            alloc.free(key);
-            return .openai;
-        } else |_| {}
+    // Auto-detect based on available API keys
+    // Priority: anthropic -> openai -> gemini -> ollama (fallback)
+    if (std.process.hasEnvVar("ANTHROPIC_API_KEY")) return .anthropic;
+    if (std.process.hasEnvVar("OPENAI_API_KEY")) return .openai;
+    if (std.process.hasEnvVar("GEMINI_API_KEY")) return .gemini;
 
-        if (std.process.getEnvVarOwned(alloc, "GEMINI_API_KEY")) |key| {
-            alloc.free(key);
-            return .gemini;
-        } else |_| {}
-
-        // Default to ollama if no API keys found (local, no key needed)
-        return .ollama;
-    }
+    // Default to ollama if no API keys found (local, no key needed)
+    return .ollama;
 }
 
 pub fn main() !void {
@@ -86,6 +75,8 @@ pub fn main() !void {
 
     // Skip program name
     _ = args_iter.next();
+
+    const detected_provider = autoDetectProvider(alloc);
 
     var query_buf: std.ArrayList(u8) = .{};
     defer query_buf.deinit(alloc);
@@ -101,7 +92,6 @@ pub fn main() !void {
         var stdout_buf: [4096]u8 = undefined;
         const stdout_file = std.fs.File.stdout();
         var stdout_writer = stdout_file.writer(&stdout_buf);
-        const detected_provider = autoDetectProvider(alloc);
         const provider_name = @tagName(detected_provider);
         try stdout_writer.interface.print("Usage: sly \"your natural language command\"\nCurrent provider: {s}\n", .{provider_name});
         try stdout_writer.interface.flush();
@@ -109,7 +99,7 @@ pub fn main() !void {
     }
 
     const cfg = providers.Config{
-        .provider = autoDetectProvider(alloc),
+        .provider = detected_provider,
         .anthropic_key = getenvOwnedOpt(alloc, "ANTHROPIC_API_KEY"),
         .anthropic_model = try getenvOwnedOr(alloc, "SLY_ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
         .gemini_key = getenvOwnedOpt(alloc, "GEMINI_API_KEY"),
