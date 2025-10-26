@@ -71,7 +71,7 @@ fn jsonEscape(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
                 };
 
                 // Valid UTF-8, copy the whole sequence
-                try out.appendSlice(allocator, s[i..i+len]);
+                try out.appendSlice(allocator, s[i .. i + len]);
                 i += len;
             },
         }
@@ -155,7 +155,7 @@ pub const Config = struct {
 
     openai_key: ?[]const u8 = null,
     openai_model: []const u8 = "gpt-4o",
-    openai_url: []const u8 = "https://api.openai.com/v1/chat/completions",
+    openai_url: []const u8 = "https://api.openai.com/v1/responses",
 
     ollama_model: []const u8 = "llama3.2",
     ollama_url: []const u8 = "http://localhost:11434",
@@ -190,7 +190,7 @@ fn openaiPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8, u
     defer alloc.free(u);
 
     return std.fmt.allocPrint(alloc,
-        \\{{"model":"{s}","messages":[{{"role":"system","content":"{s}"}},{{"role":"user","content":"{s}"}}],"max_tokens":256,"temperature":0.3}}
+        \\{{"model":"{s}","instructions":"{s}","input":"{s}","max_tokens":256,"temperature":0.3}}
     , .{ model, s, u });
 }
 
@@ -229,9 +229,7 @@ pub fn query(
             if (cfg.gemini_key == null) return error.MissingApiKey;
             const body = try geminiPayload(allocator, system_prompt, query_text);
             defer allocator.free(body);
-            const url = try std.fmt.allocPrint(allocator,
-                "https://generativelanguage.googleapis.com/v1beta/models/{s}:generateContent?key={s}",
-                .{ cfg.gemini_model, cfg.gemini_key.? });
+            const url = try std.fmt.allocPrint(allocator, "https://generativelanguage.googleapis.com/v1beta/models/{s}:generateContent?key={s}", .{ cfg.gemini_model, cfg.gemini_key.? });
             defer allocator.free(url);
             break :blk try http.postJson(allocator, url, &.{}, body);
         },
@@ -258,7 +256,7 @@ pub fn query(
     const val: ?[]u8 = switch (cfg.provider) {
         .anthropic => extractFirstStringAfter(allocator, resp.body, "text"),
         .gemini => extractFirstStringAfter(allocator, resp.body, "text"),
-        .openai => extractFirstStringAfter(allocator, resp.body, "content"),
+        .openai => extractFirstStringAfter(allocator, resp.body, "output_text"),
         .ollama => extractFirstStringAfter(allocator, resp.body, "response"),
         .echo => null,
     };
@@ -271,9 +269,9 @@ pub fn query(
         return oneline[0..trimmed.len];
     }
 
-    if (extractFirstStringAfter(allocator, resp.body, "message")) |emsg| {
-        defer allocator.free(emsg);
-        return std.fmt.allocPrint(allocator, "API Error: {s}", .{emsg});
+    // Try to extract error message from error responses
+    if (std.mem.indexOf(u8, resp.body, "\"error\"")) |_| {
+        return std.fmt.allocPrint(allocator, "API Error: Invalid request or API key", .{});
     }
 
     return error.BadResponse;
