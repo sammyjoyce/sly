@@ -5,7 +5,7 @@ Shell AI command generator - convert natural language to shell commands using AI
 ## Features
 
 - **Multiple AI providers**: Anthropic (Claude), Google (Gemini), OpenAI (GPT), Ollama (local models)
-- **Shell integration**: zsh with "# request" + Enter UX, bash with Ctrl-x a keybinding
+- **Shell integration**: zsh with "# request" + Enter UX; bash with Ctrl-x a keybinding (optional Enter auto-expand with `SLY_BASH_ENTER=1`)
 - **Context-aware**: Detects project type, git status, current directory
 - **Fast**: Written in Zig 0.15.2+ with libcurl for minimal latency
 - **Offline mode**: Echo provider for testing without API keys
@@ -38,6 +38,39 @@ export PATH="$PWD/zig-out/bin:$PATH"
 
 Add to `~/.bashrc` or `~/.zshrc` to persist.
 
+### Nix flake
+
+- Development shell: `nix develop`
+- Build the CLI: `nix build` or `nix build .#sly` (binary at `./result/bin/sly`)
+- Run directly: `nix run . -- "list all pdf files"` (or `nix run .#sly -- "list all pdf files"`)
+
+First build will error with a vendor hash for Zig dependencies. Copy the suggested `sha256-...` into `flake.nix` where `pkgs.lib.fakeHash` is used, then rebuild.
+
+Using on NixOS, you can either add the package to your `environment.systemPackages`, or import the included module and set defaults/env vars:
+
+```nix
+{
+  inputs.sly.url = "path:/path/to/this/checkout"; # or your git remote
+
+  outputs = { self, nixpkgs, sly, ... }: {
+    nixosConfigurations.your-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        sly.nixosModules.default
+        ({ config, pkgs, ... }: {
+          programs.sly.enable = true;
+          # Optional: set defaults or API keys (beware: Nix store visibility)
+          programs.sly.provider = "anthropic";
+          # programs.sly.anthropicApiKey = "..."; # prefer sops-nix/agenix instead
+        })
+      ];
+    };
+  };
+}
+```
+
+Note: Do not commit API keys directly in Nix configs. Use sops-nix, agenix, or other secret management to keep credentials out of the Nix store.
+
 ## Configuration
 
 Set environment variables to configure providers and models:
@@ -54,10 +87,10 @@ export SLY_ANTHROPIC_MODEL="claude-3-5-sonnet-20241022"  # default
 export GEMINI_API_KEY="..."
 export SLY_GEMINI_MODEL="gemini-2.0-flash-exp"  # default
 
-# OpenAI
+# OpenAI (Responses API)
 export OPENAI_API_KEY="sk-..."
 export SLY_OPENAI_MODEL="gpt-4o"  # default
-export SLY_OPENAI_URL="https://api.openai.com/v1/chat/completions"  # default
+export SLY_OPENAI_URL="https://api.openai.com/v1/responses"  # default
 
 # Ollama (local)
 export SLY_OLLAMA_MODEL="llama3.2"  # default
@@ -116,6 +149,16 @@ Then type:
 
 Press Enter to execute, or edit first.
 
+Optional: enable Enter to auto-expand `# ` lines (two-step UX) by adding:
+
+```sh
+export SLY_BASH_ENTER=1
+```
+
+With this set, on a line starting with `# `:
+- First Enter expands to the generated command (does not execute)
+- Second Enter executes the command
+
 ## Development
 
 ### Run tests
@@ -148,7 +191,7 @@ SLY_PROVIDER=echo sly "test query"
 | SLY_GEMINI_MODEL | gemini-2.0-flash-exp | Gemini model name |
 | OPENAI_API_KEY | - | OpenAI API key (required for openai provider) |
 | SLY_OPENAI_MODEL | gpt-4o | OpenAI model name |
-| SLY_OPENAI_URL | https://api.openai.com/v1/chat/completions | OpenAI API endpoint |
+| SLY_OPENAI_URL | https://api.openai.com/v1/responses | OpenAI API endpoint |
 | SLY_OLLAMA_MODEL | llama3.2 | Ollama model name |
 | SLY_OLLAMA_URL | http://localhost:11434 | Ollama server URL |
 | SLY_PROMPT_EXTEND | - | Additional system prompt instructions |

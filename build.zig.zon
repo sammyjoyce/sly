@@ -2,7 +2,7 @@
     .name = .sly,
     .version = "0.0.0",
     .fingerprint = 0x4967e228dedab162, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.16.0-dev.624+606c7bcc8",
+    .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .argzon = .{
             .url = "git+https://codeberg.org/tensorush/argzon.git#b4f348934b38e49213446ceef3c54032fb3dc0aa",
