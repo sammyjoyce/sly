@@ -155,7 +155,7 @@ pub const Config = struct {
 
     openai_key: ?[]const u8 = null,
     openai_model: []const u8 = "gpt-4o",
-    openai_url: []const u8 = "https://api.openai.com/v1/chat/completions",
+    openai_url: []const u8 = "https://api.openai.com/v1/responses",
 
     ollama_model: []const u8 = "llama3.2",
     ollama_url: []const u8 = "http://localhost:11434",
@@ -189,9 +189,12 @@ fn openaiPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8, u
     const u = try jsonEscape(alloc, user);
     defer alloc.free(u);
 
+    // OpenAI Responses API payload
+    // Use "input" for the user prompt and "instructions" for the system prompt.
+    // Responses API uses max_output_tokens instead of max_tokens.
     return std.fmt.allocPrint(alloc,
-        \\{{"model":"{s}","messages":[{{"role":"system","content":"{s}"}},{{"role":"user","content":"{s}"}}],"max_tokens":256,"temperature":0.3}}
-    , .{ model, s, u });
+        \\{{"model":"{s}","input":"{s}","instructions":"{s}","max_output_tokens":256,"temperature":0.3}}
+    , .{ model, u, s });
 }
 
 fn ollamaPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8, user: []const u8) ![]u8 {
@@ -258,7 +261,7 @@ pub fn query(
     const val: ?[]u8 = switch (cfg.provider) {
         .anthropic => extractFirstStringAfter(allocator, resp.body, "text"),
         .gemini => extractFirstStringAfter(allocator, resp.body, "text"),
-        .openai => extractFirstStringAfter(allocator, resp.body, "content"),
+        .openai => extractFirstStringAfter(allocator, resp.body, "output_text"),
         .ollama => extractFirstStringAfter(allocator, resp.body, "response"),
         .echo => null,
     };

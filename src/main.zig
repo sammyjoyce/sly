@@ -91,7 +91,7 @@ pub fn main() !void {
         .gemini_model = try getenvOwnedOr(alloc, "SLY_GEMINI_MODEL", "gemini-2.0-flash-exp"),
         .openai_key = getenvOwnedOpt(alloc, "OPENAI_API_KEY"),
         .openai_model = try getenvOwnedOr(alloc, "SLY_OPENAI_MODEL", "gpt-4o"),
-        .openai_url = try getenvOwnedOr(alloc, "SLY_OPENAI_URL", "https://api.openai.com/v1/chat/completions"),
+        .openai_url = try getenvOwnedOr(alloc, "SLY_OPENAI_URL", "https://api.openai.com/v1/responses"),
         .ollama_model = try getenvOwnedOr(alloc, "SLY_OLLAMA_MODEL", "llama3.2"),
         .ollama_url = try getenvOwnedOr(alloc, "SLY_OLLAMA_URL", "http://localhost:11434"),
     };

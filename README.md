@@ -87,10 +87,10 @@ export SLY_ANTHROPIC_MODEL="claude-3-5-sonnet-20241022"  # default
 export GEMINI_API_KEY="..."
 export SLY_GEMINI_MODEL="gemini-2.0-flash-exp"  # default
 
-# OpenAI
+# OpenAI (Responses API)
 export OPENAI_API_KEY="sk-..."
 export SLY_OPENAI_MODEL="gpt-4o"  # default
-export SLY_OPENAI_URL="https://api.openai.com/v1/chat/completions"  # default
+export SLY_OPENAI_URL="https://api.openai.com/v1/responses"  # default
 
 # Ollama (local)
 export SLY_OLLAMA_MODEL="llama3.2"  # default
@@ -181,7 +181,7 @@ SLY_PROVIDER=echo sly "test query"
 | SLY_GEMINI_MODEL | gemini-2.0-flash-exp | Gemini model name |
 | OPENAI_API_KEY | - | OpenAI API key (required for openai provider) |
 | SLY_OPENAI_MODEL | gpt-4o | OpenAI model name |
-| SLY_OPENAI_URL | https://api.openai.com/v1/chat/completions | OpenAI API endpoint |
+| SLY_OPENAI_URL | https://api.openai.com/v1/responses | OpenAI API endpoint |
 | SLY_OLLAMA_MODEL | llama3.2 | Ollama model name |
 | SLY_OLLAMA_URL | http://localhost:11434 | Ollama server URL |
 | SLY_PROMPT_EXTEND | - | Additional system prompt instructions |
