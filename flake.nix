@@ -20,11 +20,12 @@
           overlays = [ zig-overlay.overlays.default ];
         };
 
-        zig = pkgs.zigpkgs.master;
+        zigBuild = pkgs.zig_0_15;
+        zigFetch = pkgs.zigpkgs.master;
 
         zigFetchDeps = import (pkgs.path + "/pkgs/development/compilers/zig/fetcher.nix") {
           inherit (pkgs) lib runCommand;
-          inherit zig;
+          zig = zigFetch;
         };
 
         zigDeps = zigFetchDeps {
@@ -40,7 +41,7 @@
 
           src = ./.;
 
-          nativeBuildInputs = [ pkgs.pkg-config zig ];
+          nativeBuildInputs = [ pkgs.pkg-config zigBuild ];
           buildInputs = [ pkgs.curl ];
 
           zigBuildFlags = [ "-Dcpu=baseline" "-Doptimize=ReleaseSafe" ];
@@ -154,7 +155,7 @@
 
         devShells.default = pkgs.mkShell {
           packages = [
-            zig
+            zigBuild
             pkgs.pkg-config
             pkgs.curl
             pkgs.git
