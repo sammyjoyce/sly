@@ -31,10 +31,10 @@
           pname = "sly";
           version = "0.0.0";
           src = ./.;
-          hash = pkgs.lib.fakeHash;
+          hash = "sha256-XHoMgyIXJEfh0YGjHNAZVk/yYrPpKx6F7mLzA/Bn64Y=";
         };
 
-        sly = pkgs.stdenv.mkDerivation {
+        sly = pkgs.stdenv.mkDerivation (rec {
           pname = "sly";
           version = "0.0.0";
 
@@ -52,7 +52,7 @@
 
           buildPhase = ''
             runHook preBuild
-            zig build -j"${NIX_BUILD_CORES:-1}" ${pkgs.lib.escapeShellArgs zigBuildFlags} --verbose
+            zig build ${pkgs.lib.escapeShellArgs zigBuildFlags} --verbose
             runHook postBuild
           '';
 
@@ -72,7 +72,7 @@
             mainProgram = "sly";
             platforms = platforms.unix;
           };
-        };
+        });
 
         nixosModule = { config, lib, pkgs, ... }:
           let
