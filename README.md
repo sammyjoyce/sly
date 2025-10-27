@@ -38,6 +38,39 @@ export PATH="$PWD/zig-out/bin:$PATH"
 
 Add to `~/.bashrc` or `~/.zshrc` to persist.
 
+### Nix flake
+
+- Development shell: `nix develop`
+- Build the CLI: `nix build` (binary at `./result/bin/sly`)
+- Run directly: `nix run . -- "list all pdf files"`
+
+First build will error with a vendor hash for Zig dependencies. Copy the suggested `sha256-...` into `flake.nix` where `pkgs.lib.fakeHash` is used, then rebuild.
+
+Using on NixOS, you can either add the package to your `environment.systemPackages`, or import the included module and set defaults/env vars:
+
+```nix
+{
+  inputs.sly.url = "path:/path/to/this/checkout"; # or your git remote
+
+  outputs = { self, nixpkgs, sly, ... }: {
+    nixosConfigurations.your-host = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        sly.nixosModules.default
+        ({ config, pkgs, ... }: {
+          programs.sly.enable = true;
+          # Optional: set defaults or API keys (beware: Nix store visibility)
+          programs.sly.provider = "anthropic";
+          # programs.sly.anthropicApiKey = "..."; # prefer sops-nix/agenix instead
+        })
+      ];
+    };
+  };
+}
+```
+
+Note: Do not commit API keys directly in Nix configs. Use sops-nix, agenix, or other secret management to keep credentials out of the Nix store.
+
 ## Configuration
 
 Set environment variables to configure providers and models:
