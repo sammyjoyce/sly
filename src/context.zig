@@ -1,5 +1,47 @@
 const std = @import("std");
 
+fn getenvOwnedOpt(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
+    return std.process.getEnvVarOwned(allocator, key) catch null;
+}
+
+fn getShellContext(allocator: std.mem.Allocator) ![]u8 {
+    var line: std.ArrayList(u8) = .{};
+    errdefer line.deinit(allocator);
+
+    const bash_v = getenvOwnedOpt(allocator, "BASH_VERSION");
+    defer if (bash_v) |v| allocator.free(v);
+    const zsh_v = getenvOwnedOpt(allocator, "ZSH_VERSION");
+    defer if (zsh_v) |v| allocator.free(v);
+    const fish_v = getenvOwnedOpt(allocator, "FISH_VERSION");
+    defer if (fish_v) |v| allocator.free(v);
+    const shell_path = getenvOwnedOpt(allocator, "SHELL");
+    defer if (shell_path) |v| allocator.free(v);
+
+    var name: []const u8 = "unknown";
+    var ver: []const u8 = "";
+
+    if (zsh_v) |v| {
+        name = "zsh";
+        ver = v;
+    } else if (bash_v) |v| {
+        name = "bash";
+        ver = v;
+    } else if (fish_v) |v| {
+        name = "fish";
+        ver = v;
+    } else if (shell_path) |p| {
+        // derive basename of SHELL path
+        const idx = std.mem.lastIndexOfScalar(u8, p, '/');
+        name = if (idx) |i| p[i + 1 ..] else p;
+    }
+
+    try line.writer(allocator).print("Shell: {s}", .{name});
+    if (ver.len > 0) try line.writer(allocator).print(" {s}", .{ver});
+    if (shell_path) |p| try line.writer(allocator).print(" (SHELL={s})", .{p});
+
+    return line.toOwnedSlice(allocator);
+}
+
 fn pathExists(p: []const u8) bool {
     std.fs.cwd().access(p, .{}) catch return false;
     return true;
@@ -135,6 +177,12 @@ pub fn buildContext(allocator: std.mem.Allocator) ![]u8 {
         else => "Unix",
     };
     try buf.writer(allocator).print("\nOS: {s}", .{os_name});
+
+    const shell_line = try getShellContext(allocator);
+    defer allocator.free(shell_line);
+    if (shell_line.len > 0) {
+        try buf.writer(allocator).print("\n{s}", .{shell_line});
+    }
 
     return buf.toOwnedSlice(allocator);
 }
