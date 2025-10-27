@@ -5,7 +5,7 @@ Shell AI command generator - convert natural language to shell commands using AI
 ## Features
 
 - **Multiple AI providers**: Anthropic (Claude), Google (Gemini), OpenAI (GPT), Ollama (local models)
-- **Shell integration**: zsh with "# request" + Enter UX, bash with Ctrl-x a keybinding
+- **Shell integration**: zsh with "# request" + Enter UX; bash with Ctrl-x a keybinding (optional Enter auto-expand with `SLY_BASH_ENTER=1`)
 - **Context-aware**: Detects project type, git status, current directory
 - **Fast**: Written in Zig 0.15.2+ with libcurl for minimal latency
 - **Offline mode**: Echo provider for testing without API keys
@@ -41,8 +41,8 @@ Add to `~/.bashrc` or `~/.zshrc` to persist.
 ### Nix flake
 
 - Development shell: `nix develop`
-- Build the CLI: `nix build` (binary at `./result/bin/sly`)
-- Run directly: `nix run . -- "list all pdf files"`
+- Build the CLI: `nix build` or `nix build .#sly` (binary at `./result/bin/sly`)
+- Run directly: `nix run . -- "list all pdf files"` (or `nix run .#sly -- "list all pdf files"`)
 
 First build will error with a vendor hash for Zig dependencies. Copy the suggested `sha256-...` into `flake.nix` where `pkgs.lib.fakeHash` is used, then rebuild.
 
@@ -148,6 +148,16 @@ Then type:
 ```
 
 Press Enter to execute, or edit first.
+
+Optional: enable Enter to auto-expand `# ` lines (two-step UX) by adding:
+
+```sh
+export SLY_BASH_ENTER=1
+```
+
+With this set, on a line starting with `# `:
+- First Enter expands to the generated command (does not execute)
+- Second Enter executes the command
 
 ## Development
 
