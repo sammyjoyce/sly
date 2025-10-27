@@ -20,8 +20,8 @@
           overlays = [ zig-overlay.overlays.default ];
         };
 
-        zigBuild = pkgs.zig_0_15;
-        zigFetch = pkgs.zigpkgs.master;
+        zigBuild = pkgs.zig_0_15; # 0.15.2 in nixpkgs-unstable
+        zigFetch = zigBuild;      # fetch deps with the same Zig version
 
         zigFetchDeps = import (pkgs.path + "/pkgs/development/compilers/zig/fetcher.nix") {
           inherit (pkgs) lib runCommand;
