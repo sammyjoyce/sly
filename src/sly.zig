@@ -1,14 +1,167 @@
 //! Source file that exposes the executable's API and test suite to users, Autodoc, and the build system.
+//!
+//! This module provides the core API for the sly command generator, allowing it to be used
+//! as a library or from the CLI.
 
 const std = @import("std");
+const ctx = @import("context.zig");
+const providers = @import("providers.zig");
 
-/// Run core logic.
-pub fn run(string: []const u8, number: u8, writer: *std.io.Writer) std.io.Writer.Error!void {
-    for (0..number) |_| {
-        try writer.print("{s}\n", .{string});
+// Re-export core types for convenience
+pub const Provider = providers.Provider;
+pub const Config = providers.Config;
+
+/// Parse a provider name string into a Provider enum.
+/// Returns .anthropic as the default for unknown provider names.
+pub fn parseProvider(name: []const u8) Provider {
+    if (std.mem.eql(u8, name, "anthropic")) return .anthropic;
+    if (std.mem.eql(u8, name, "gemini")) return .gemini;
+    if (std.mem.eql(u8, name, "openai")) return .openai;
+    if (std.mem.eql(u8, name, "ollama")) return .ollama;
+    if (std.mem.eql(u8, name, "echo")) return .echo;
+    return .anthropic;
+}
+
+/// Get an environment variable with a default fallback.
+/// The caller is responsible for freeing the returned string.
+pub fn getEnvOr(allocator: std.mem.Allocator, key: []const u8, default_value: []const u8) ![]const u8 {
+    return std.process.getEnvVarOwned(allocator, key) catch try allocator.dupe(u8, default_value);
+}
+
+/// Get an environment variable, returning null if not set.
+/// The caller is responsible for freeing the returned string if non-null.
+pub fn getEnvOpt(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
+    return std.process.getEnvVarOwned(allocator, key) catch null;
+}
+
+/// Build a system prompt with context and optional extensions.
+/// The caller is responsible for freeing the returned string.
+pub fn buildSystemPrompt(allocator: std.mem.Allocator, context: []const u8, extend: ?[]const u8) ![]u8 {
+    const base =
+        \\You are a shell command generator. Generate syntactically correct shell commands based on the user's natural language request.
+        \\
+        \\IMPORTANT RULES:
+        \\1. Output ONLY the raw command - no explanations, no markdown, no backticks
+        \\2. For arguments containing spaces or special characters, use single quotes
+        \\3. Use double quotes only when variable expansion is needed
+        \\4. Properly escape special characters within quotes
+        \\
+        \\Examples:
+        \\- echo 'Hello World!'
+        \\- echo "Current user: $USER"
+        \\- grep 'pattern with spaces' file.txt
+        \\- find . -name '*.txt'
+    ;
+
+    var buf = std.ArrayList(u8){};
+    errdefer buf.deinit(allocator);
+
+    try buf.appendSlice(allocator, base);
+    if (extend) |e| {
+        try buf.appendSlice(allocator, "\n\n");
+        try buf.appendSlice(allocator, e);
     }
+    try buf.appendSlice(allocator, "\n\nContext:\n");
+    try buf.appendSlice(allocator, context);
+
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Load configuration from environment variables.
+/// The caller is responsible for freeing the Config using freeConfig.
+pub fn loadConfigFromEnv(allocator: std.mem.Allocator) !Config {
+    const provider_env = try getEnvOr(allocator, "SLY_PROVIDER", "anthropic");
+    defer allocator.free(provider_env);
+
+    return Config{
+        .provider = parseProvider(provider_env),
+        .anthropic_key = getEnvOpt(allocator, "ANTHROPIC_API_KEY"),
+        .anthropic_model = try getEnvOr(allocator, "SLY_ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
+        .gemini_key = getEnvOpt(allocator, "GEMINI_API_KEY"),
+        .gemini_model = try getEnvOr(allocator, "SLY_GEMINI_MODEL", "gemini-2.0-flash-exp"),
+        .openai_key = getEnvOpt(allocator, "OPENAI_API_KEY"),
+        .openai_model = try getEnvOr(allocator, "SLY_OPENAI_MODEL", "gpt-4o"),
+        .openai_url = try getEnvOr(allocator, "SLY_OPENAI_URL", "https://api.openai.com/v1/responses"),
+        .ollama_model = try getEnvOr(allocator, "SLY_OLLAMA_MODEL", "llama3.2"),
+        .ollama_url = try getEnvOr(allocator, "SLY_OLLAMA_URL", "http://localhost:11434"),
+    };
+}
+
+/// Free all allocated memory in a Config struct.
+pub fn freeConfig(allocator: std.mem.Allocator, config: Config) void {
+    if (config.anthropic_key) |v| allocator.free(v);
+    if (config.gemini_key) |v| allocator.free(v);
+    if (config.openai_key) |v| allocator.free(v);
+    allocator.free(config.anthropic_model);
+    allocator.free(config.gemini_model);
+    allocator.free(config.openai_model);
+    allocator.free(config.openai_url);
+    allocator.free(config.ollama_model);
+    allocator.free(config.ollama_url);
+}
+
+/// Generate a shell command from a natural language query.
+///
+/// This is the main entry point for the sly API. It takes a query string and configuration,
+/// builds the necessary context and prompts, and returns the generated command.
+///
+/// The caller is responsible for freeing the returned string.
+pub fn generate(allocator: std.mem.Allocator, query: []const u8, config: Config) ![]u8 {
+    const context = try ctx.buildContext(allocator);
+    defer allocator.free(context);
+
+    const extend = getEnvOpt(allocator, "SLY_PROMPT_EXTEND");
+    defer if (extend) |e| allocator.free(e);
+
+    const prompt = try buildSystemPrompt(allocator, context, extend);
+    defer allocator.free(prompt);
+
+    return providers.query(allocator, config, query, prompt) catch |e| blk: {
+        const msg = switch (e) {
+            error.MissingApiKey => "API Error: Missing API key",
+            error.BadResponse => "Error: Unable to parse response",
+            error.Network, error.Unavailable => "Error: Failed to connect to provider",
+            else => "Error: Unknown",
+        };
+        break :blk try allocator.dupe(u8, msg);
+    };
 }
 
 test {
     std.testing.refAllDecls(@This());
+}
+
+test "parseProvider returns correct enum values" {
+    try std.testing.expectEqual(Provider.anthropic, parseProvider("anthropic"));
+    try std.testing.expectEqual(Provider.gemini, parseProvider("gemini"));
+    try std.testing.expectEqual(Provider.openai, parseProvider("openai"));
+    try std.testing.expectEqual(Provider.ollama, parseProvider("ollama"));
+    try std.testing.expectEqual(Provider.echo, parseProvider("echo"));
+}
+
+test "parseProvider defaults to anthropic for unknown providers" {
+    try std.testing.expectEqual(Provider.anthropic, parseProvider("unknown"));
+    try std.testing.expectEqual(Provider.anthropic, parseProvider(""));
+    try std.testing.expectEqual(Provider.anthropic, parseProvider("foo"));
+}
+
+test "buildSystemPrompt includes context" {
+    const allocator = std.testing.allocator;
+    const test_context = "Test context";
+    const prompt = try buildSystemPrompt(allocator, test_context, null);
+    defer allocator.free(prompt);
+
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "shell command generator") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Test context") != null);
+}
+
+test "buildSystemPrompt includes extension" {
+    const allocator = std.testing.allocator;
+    const test_context = "Test context";
+    const test_extend = "Additional instructions";
+    const prompt = try buildSystemPrompt(allocator, test_context, test_extend);
+    defer allocator.free(prompt);
+
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Additional instructions") != null);
+    try std.testing.expect(std.mem.indexOf(u8, prompt, "Test context") != null);
 }
