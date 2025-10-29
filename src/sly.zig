@@ -30,6 +30,37 @@ pub fn parseProvider(name: []const u8) Provider {
     return .anthropic;
 }
 
+/// Auto-detect provider based on available API keys.
+/// Priority: anthropic -> openai -> gemini -> ollama (fallback).
+/// Returns the provider to use.
+pub fn autoDetectProvider(allocator: std.mem.Allocator) Provider {
+    // Check if provider is explicitly set
+    if (getEnvOpt(allocator, "SLY_PROVIDER")) |provider_env| {
+        defer allocator.free(provider_env);
+        return parseProvider(provider_env);
+    }
+
+    // Auto-detect based on available API keys
+    // Priority: anthropic -> openai -> gemini -> ollama (fallback)
+    if (getEnvOpt(allocator, "ANTHROPIC_API_KEY")) |key| {
+        allocator.free(key);
+        return .anthropic;
+    }
+
+    if (getEnvOpt(allocator, "OPENAI_API_KEY")) |key| {
+        allocator.free(key);
+        return .openai;
+    }
+
+    if (getEnvOpt(allocator, "GEMINI_API_KEY")) |key| {
+        allocator.free(key);
+        return .gemini;
+    }
+
+    // Default to ollama if no API keys found (local, no key needed)
+    return .ollama;
+}
+
 /// Get an environment variable with a default fallback.
 /// The caller is responsible for freeing the returned string.
 pub fn getEnvOr(allocator: std.mem.Allocator, key: []const u8, default_value: []const u8) ![]const u8 {
@@ -78,11 +109,8 @@ pub fn buildSystemPrompt(allocator: std.mem.Allocator, context: []const u8, exte
 /// Load configuration from environment variables.
 /// The caller is responsible for freeing the Config using freeConfig.
 pub fn loadConfigFromEnv(allocator: std.mem.Allocator) !Config {
-    const provider_env = try getEnvOr(allocator, "SLY_PROVIDER", "anthropic");
-    defer allocator.free(provider_env);
-
     return Config{
-        .provider = parseProvider(provider_env),
+        .provider = autoDetectProvider(allocator),
         .anthropic_key = getEnvOpt(allocator, "ANTHROPIC_API_KEY"),
         .anthropic_model = try getEnvOr(allocator, "SLY_ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
         .gemini_key = getEnvOpt(allocator, "GEMINI_API_KEY"),
