@@ -14,6 +14,10 @@ pub const version = "0.1.0";
 pub const Provider = providers.Provider;
 pub const Config = providers.Config;
 
+// Shell integration scripts embedded at compile time
+pub const zsh_plugin = @embedFile("sly.plugin.zsh");
+pub const bash_plugin = @embedFile("bash-sly.plugin.sh");
+
 /// Parse a provider name string into a Provider enum.
 /// Returns .anthropic as the default for unknown provider names.
 pub fn parseProvider(name: []const u8) Provider {
@@ -128,6 +132,113 @@ pub fn generate(allocator: std.mem.Allocator, query: []const u8, config: Config)
         };
         break :blk try allocator.dupe(u8, msg);
     };
+}
+
+/// Shell types supported for integration
+pub const ShellType = enum {
+    bash,
+    zsh,
+    unknown,
+
+    pub fn fromString(s: []const u8) ShellType {
+        if (std.mem.indexOf(u8, s, "zsh") != null) return .zsh;
+        if (std.mem.indexOf(u8, s, "bash") != null) return .bash;
+        return .unknown;
+    }
+
+    pub fn toString(self: ShellType) []const u8 {
+        return switch (self) {
+            .bash => "bash",
+            .zsh => "zsh",
+            .unknown => "unknown",
+        };
+    }
+
+    pub fn rcFile(self: ShellType) []const u8 {
+        return switch (self) {
+            .bash => ".bashrc",
+            .zsh => ".zshrc",
+            .unknown => "",
+        };
+    }
+
+    pub fn pluginContent(self: ShellType) []const u8 {
+        return switch (self) {
+            .bash => bash_plugin,
+            .zsh => zsh_plugin,
+            .unknown => "",
+        };
+    }
+};
+
+/// Detect the current shell from environment
+pub fn detectShell(allocator: std.mem.Allocator) ShellType {
+    const shell_path = getEnvOpt(allocator, "SHELL") orelse return .unknown;
+    defer allocator.free(shell_path);
+
+    return ShellType.fromString(shell_path);
+}
+
+/// Install shell integration for the specified shell type
+pub fn installShellIntegration(allocator: std.mem.Allocator, shell: ShellType, auto_source: bool) !void {
+    if (shell == .unknown) return error.UnsupportedShell;
+
+    // Get home directory
+    const home = getEnvOpt(allocator, "HOME") orelse return error.NoHomeDir;
+    defer allocator.free(home);
+
+    // Create ~/.config/sly directory
+    const config_dir = try std.fs.path.join(allocator, &[_][]const u8{ home, ".config", "sly" });
+    defer allocator.free(config_dir);
+
+    std.fs.cwd().makePath(config_dir) catch |err| {
+        if (err != error.PathAlreadyExists) return err;
+    };
+
+    // Write plugin file
+    const plugin_filename = switch (shell) {
+        .bash => "sly.plugin.sh",
+        .zsh => "sly.plugin.zsh",
+        .unknown => unreachable,
+    };
+
+    const plugin_path = try std.fs.path.join(allocator, &[_][]const u8{ config_dir, plugin_filename });
+    defer allocator.free(plugin_path);
+
+    const plugin_file = try std.fs.cwd().createFile(plugin_path, .{});
+    defer plugin_file.close();
+
+    try plugin_file.writeAll(shell.pluginContent());
+
+    // Optionally add source line to rc file
+    if (auto_source) {
+        const rc_path = try std.fs.path.join(allocator, &[_][]const u8{ home, shell.rcFile() });
+        defer allocator.free(rc_path);
+
+        const source_line = try std.fmt.allocPrint(
+            allocator,
+            "\n# sly shell integration\nsource {s}\n",
+            .{plugin_path},
+        );
+        defer allocator.free(source_line);
+
+        // Check if already sourced
+        const rc_content = std.fs.cwd().readFileAlloc(allocator, rc_path, 1024 * 1024) catch |err| blk: {
+            if (err == error.FileNotFound) {
+                break :blk try allocator.dupe(u8, "");
+            }
+            return err;
+        };
+        defer allocator.free(rc_content);
+
+        if (std.mem.indexOf(u8, rc_content, plugin_path) == null) {
+            const rc_file = try std.fs.cwd().openFile(rc_path, .{ .mode = .write_only });
+            defer rc_file.close();
+
+            try rc_file.seekFromEnd(0);
+            try rc_file.writeAll(source_line);
+        }
+    }
 }
 
 test {
