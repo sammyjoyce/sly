@@ -26,8 +26,8 @@ fn installShellCommand(alloc: std.mem.Allocator, args_iter: *std.process.ArgIter
     if (shell == .unknown) {
         try stdout_writer.interface.print(
             \\Unable to detect shell type. Please specify explicitly:
-            \\  sly install-shell bash
-            \\  sly install-shell zsh
+            \\  sly shell install bash
+            \\  sly shell install zsh
             \\
         , .{});
         try stdout_writer.interface.flush();
@@ -81,7 +81,7 @@ fn installShellCommand(alloc: std.mem.Allocator, args_iter: *std.process.ArgIter
             \\  source {s}
             \\
             \\Or run with --auto to automatically update your rc file:
-            \\  sly install-shell --auto
+            \\  sly shell install --auto
             \\
         , .{ shell.rcFile(), plugin_path });
     }
@@ -115,9 +115,21 @@ pub fn main() !void {
             try stdout_writer.interface.flush();
             return;
         }
-        if (std.mem.eql(u8, arg, "install-shell")) {
-            try installShellCommand(alloc, &args_iter);
-            return;
+        if (std.mem.eql(u8, arg, "shell")) {
+            const subcommand = args_iter.next();
+            if (subcommand) |subcmd| {
+                if (std.mem.eql(u8, subcmd, "install")) {
+                    try installShellCommand(alloc, &args_iter);
+                    return;
+                }
+            }
+            // Invalid shell subcommand
+            var stdout_buf: [4096]u8 = undefined;
+            const stdout_file = std.fs.File.stdout();
+            var stdout_writer = stdout_file.writer(&stdout_buf);
+            try stdout_writer.interface.print("Unknown shell subcommand. Use 'sly shell install'\n", .{});
+            try stdout_writer.interface.flush();
+            return error.InvalidCommand;
         }
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             var stdout_buf: [4096]u8 = undefined;
@@ -128,21 +140,22 @@ pub fn main() !void {
                 \\
                 \\Usage:
                 \\  sly [OPTIONS] "natural language query"
-                \\  sly install-shell [bash|zsh] [--auto]
+                \\  sly shell install [bash|zsh] [--auto]
                 \\
                 \\Options:
                 \\  -h, --help     Show this help message
                 \\  -v, --version  Show version information
                 \\
                 \\Commands:
-                \\  install-shell [bash|zsh]  Install shell integration (auto-detects if not specified)
+                \\  shell install [bash|zsh]  Install shell integration
+                \\    [bash|zsh]              Specify shell (auto-detects if omitted)
                 \\    --auto, -a              Automatically add source line to shell rc file
                 \\
                 \\Examples:
                 \\  sly "list all pdf files"
                 \\  sly "show disk usage sorted by size"
-                \\  sly install-shell         # Auto-detect and install
-                \\  sly install-shell zsh --auto
+                \\  sly shell install              # Auto-detect and install
+                \\  sly shell install zsh --auto   # Install for zsh and update ~/.zshrc
                 \\
                 \\Environment Variables:
                 \\  SLY_PROVIDER            AI provider (anthropic, gemini, openai, ollama, echo)
