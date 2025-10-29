@@ -1,21 +1,44 @@
 .{
     .name = "sly",
-    .description = "Shell AI command generator",
-    .options = .{
+    .description = "Shell AI command generator - convert natural language to shell commands",
+    .flags = .{
         .{
-            .short = 'n',
-            .long = "number",
-            .type = "u8",
-            .default = 3,
-            .description = "Number of times to print the string.",
+            .short = 'v',
+            .long = "version",
+            .description = "Show version information",
+        },
+    },
+    .subcommands = .{
+        .{
+            .name = "shell",
+            .description = "Shell integration management",
+            .subcommands = .{
+                .{
+                    .name = "install",
+                    .description = "Install shell integration plugin",
+                    .options = .{
+                        .{
+                            .long = "shell",
+                            .type = "string",
+                            .description = "Shell type (bash or zsh, auto-detects if omitted)",
+                        },
+                    },
+                    .flags = .{
+                        .{
+                            .short = 'a',
+                            .long = "auto",
+                            .description = "Automatically add source line to shell rc file",
+                        },
+                    },
+                },
+            },
         },
     },
     .positionals = .{
         .{
-            .meta = .STRING,
+            .meta = .QUERY,
             .type = "string",
-            .default = "All your codebase are belong to us.",
-            .description = "String to print.",
+            .description = "Natural language command query",
         },
     },
 }
