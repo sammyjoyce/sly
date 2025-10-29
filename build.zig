@@ -40,7 +40,7 @@ pub fn build(b: *std.Build) void {
 
     // Install zsh plugin
     const install_zsh = b.addInstallFile(
-        b.path("lib/sly.plugin.zsh"),
+        b.path("src/sly.plugin.zsh"),
         "lib/sly.plugin.zsh",
     );
     install_shell_integrations.dependOn(&install_zsh.step);
@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
 
     // Install bash plugin
     const install_bash = b.addInstallFile(
-        b.path("lib/bash-sly.plugin.sh"),
+        b.path("src/bash-sly.plugin.sh"),
         "lib/bash-sly.plugin.sh",
     );
     install_shell_integrations.dependOn(&install_bash.step);
