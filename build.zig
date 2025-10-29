@@ -10,19 +10,29 @@ pub fn build(b: *std.Build) void {
     version_file.addOption([]const u8, "version", version);
     version_file.addOption([]const u8, "build_mode", @tagName(optimize));
 
+    // Get argzon dependency
+    const argzon_dep = b.dependency("argzon", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const root_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/main.zig"),
     });
     root_mod.addImport("build_options", version_file.createModule());
+    root_mod.addImport("argzon", argzon_dep.module("argzon"));
 
     const exe = b.addExecutable(.{
         .name = "sly",
         .root_module = root_mod,
     });
     exe.linkLibC();
-    exe.linkSystemLibrary("curl");
+
+    // Try pkg-config first (for nix develop), fall back to system search
+    exe.linkSystemLibrary2("curl", .{ .use_pkg_config = .yes });
+
     b.installArtifact(exe);
 
     // Install shell integrations
@@ -58,4 +68,14 @@ pub fn build(b: *std.Build) void {
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
     test_step.dependOn(&run_unit_tests.step);
+
+    // Add check step for ZLS build-on-save
+    const exe_check = b.addExecutable(.{
+        .name = "sly",
+        .root_module = root_mod,
+    });
+    exe_check.linkLibC();
+    exe_check.linkSystemLibrary2("curl", .{ .use_pkg_config = .yes });
+    const check = b.step("check", "Check if sly compiles");
+    check.dependOn(&exe_check.step);
 }

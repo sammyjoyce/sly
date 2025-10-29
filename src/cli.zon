@@ -19,7 +19,7 @@
                     .options = .{
                         .{
                             .long = "shell",
-                            .type = "string",
+                            .type = "?string",
                             .description = "Shell type (bash or zsh, auto-detects if omitted)",
                         },
                     },
@@ -32,13 +32,6 @@
                     },
                 },
             },
-        },
-    },
-    .positionals = .{
-        .{
-            .meta = .QUERY,
-            .type = "string",
-            .description = "Natural language command query",
         },
     },
 }
