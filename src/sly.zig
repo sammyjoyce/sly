@@ -7,6 +7,9 @@ const std = @import("std");
 const ctx = @import("context.zig");
 const providers = @import("providers.zig");
 
+/// Version information (set by build system)
+pub const version = "0.1.0";
+
 // Re-export core types for convenience
 pub const Provider = providers.Provider;
 pub const Config = providers.Config;
