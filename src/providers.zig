@@ -71,7 +71,7 @@ fn jsonEscape(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
                 };
 
                 // Valid UTF-8, copy the whole sequence
-                try out.appendSlice(allocator, s[i..i+len]);
+                try out.appendSlice(allocator, s[i .. i + len]);
                 i += len;
             },
         }
@@ -232,9 +232,7 @@ pub fn query(
             if (cfg.gemini_key == null) return error.MissingApiKey;
             const body = try geminiPayload(allocator, system_prompt, query_text);
             defer allocator.free(body);
-            const url = try std.fmt.allocPrint(allocator,
-                "https://generativelanguage.googleapis.com/v1beta/models/{s}:generateContent?key={s}",
-                .{ cfg.gemini_model, cfg.gemini_key.? });
+            const url = try std.fmt.allocPrint(allocator, "https://generativelanguage.googleapis.com/v1beta/models/{s}:generateContent?key={s}", .{ cfg.gemini_model, cfg.gemini_key.? });
             defer allocator.free(url);
             break :blk try http.postJson(allocator, url, &.{}, body);
         },

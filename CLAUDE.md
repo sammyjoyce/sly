@@ -16,6 +16,25 @@ A shell command generator written in Zig that converts natural language to shell
 
 **Language**: Zig 0.15.2+
 
+### Building on NixOS
+
+NixOS stores libraries in the Nix store rather than standard system paths. Use one of these methods:
+
+**Production build**:
+```sh
+nix build
+# Binary available at: ./result/bin/sly
+```
+
+**Development build**:
+```sh
+nix develop
+zig build -Doptimize=ReleaseSafe
+# Binary available at: ./zig-out/bin/sly
+```
+
+### Building on other systems
+
 **Build command**: `zig build -Doptimize=ReleaseSafe`
 
 **Test command**: `zig build test`
@@ -27,7 +46,8 @@ A shell command generator written in Zig that converts natural language to shell
 ## Dependencies
 
 - **Zig 0.15.2+** - Programming language and build system
-- **libcurl** - HTTP client for API calls (system library, linked via `linkSystemLibrary("curl")`)
+- **libcurl** - HTTP client for API calls (system library, linked via pkg-config when available)
+- **argzon** - Command-line argument parsing library (Zig dependency, fetched automatically)
 
 The `.claude/install_deps.sh` script automatically installs these in Claude Code web environments.
 
@@ -39,6 +59,17 @@ The `.claude/install_deps.sh` script automatically installs these in Claude Code
 - Written in Zig for performance and minimal latency
 
 ## Development Workflow
+
+### On NixOS:
+
+1. **Enter dev shell**: `nix develop`
+2. **Make changes** to source files in `src/`
+3. **Format code**: `zig fmt src/ build.zig`
+4. **Build**: `zig build -Doptimize=ReleaseSafe`
+5. **Test**: `zig build test` (if tests exist)
+6. **Run**: `./zig-out/bin/sly "your query"`
+
+### On other systems:
 
 1. **Make changes** to source files in `src/`
 2. **Format code**: `zig fmt src/ build.zig`
