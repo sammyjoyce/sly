@@ -6,9 +6,10 @@
 const std = @import("std");
 const ctx = @import("context.zig");
 const providers = @import("providers.zig");
+const build_options = @import("build_options");
 
 /// Version information (set by build system)
-pub const version = "0.1.0";
+pub const version = build_options.version;
 
 // Re-export core types for convenience
 pub const Provider = providers.Provider;
@@ -141,8 +142,9 @@ pub const ShellType = enum {
     unknown,
 
     pub fn fromString(s: []const u8) ShellType {
-        if (std.mem.indexOf(u8, s, "zsh") != null) return .zsh;
-        if (std.mem.indexOf(u8, s, "bash") != null) return .bash;
+        const basename = std.fs.path.basename(s);
+        if (std.mem.eql(u8, basename, "zsh")) return .zsh;
+        if (std.mem.eql(u8, basename, "bash")) return .bash;
         return .unknown;
     }
 
@@ -232,7 +234,14 @@ pub fn installShellIntegration(allocator: std.mem.Allocator, shell: ShellType, a
         defer allocator.free(rc_content);
 
         if (std.mem.indexOf(u8, rc_content, plugin_path) == null) {
-            const rc_file = try std.fs.cwd().openFile(rc_path, .{ .mode = .write_only });
+            // Open or create the rc file in read-write mode, then append
+            const rc_file = std.fs.cwd().openFile(rc_path, .{ .mode = .read_write }) catch |err| blk: {
+                if (err == error.FileNotFound) {
+                    // Create the file if it doesn't exist
+                    break :blk try std.fs.cwd().createFile(rc_path, .{ .read = true });
+                }
+                return err;
+            };
             defer rc_file.close();
 
             try rc_file.seekFromEnd(0);
