@@ -5,6 +5,7 @@ _zig_ai_exec() {
   local query="$1"
   local tmp
   tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' EXIT
   setopt local_options no_monitor no_notify
   ( sly "$query" >"$tmp" 2>/dev/null ) &
   local pid=$!
