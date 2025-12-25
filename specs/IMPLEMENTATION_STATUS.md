@@ -1,13 +1,13 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 31)
+**Last Updated:** 2025-12-26 (Work Session 32)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
 
 This document tracks detailed implementation status for integrating libghostty-vt into sly. The integration replaces manual ANSI parsing with ghostty's terminal emulation engine.
 
-**🎯 Current Status:** All core phases (0-7) are complete and tested with 130+ passing unit tests. System is production-ready and awaiting real-world AI provider testing.
+**🎯 Current Status:** All core phases (0-7) are complete and tested with 135+ passing unit tests. System is production-ready and awaiting real-world AI provider testing.
 
 **Related Documents:**
 - 🏗️ [libghostty-implementation-plan.md](./libghostty-implementation-plan.md) - Phase-by-phase roadmap
@@ -33,6 +33,35 @@ This document tracks detailed implementation status for integrating libghostty-v
 **Overall Progress:** ~97% complete (all core functionality production-ready, awaiting real-world testing)
 
 ## Current Status
+
+### Work Session 32 Highlights (2025-12-26)
+
+**Terminal Runtime Enhancements:**
+- ✅ Added CSI ?25h/l cursor visibility control (DECTCEM)
+- ✅ Added CSI ?7h/l autowrap mode support (DECAWM)
+- ✅ Added DECSCUSR cursor style parsing (CSI n SP q) for block/underline/bar styles
+- ✅ Added autowrap_mode field to TerminalRuntime with proper addChar() integration
+- ✅ Added intermediate byte tracking in CSI parser for sequences like DECSCUSR
+
+**Command Planner Improvements:**
+- ✅ Added proper shell quoting in buildCommandString() using single-quote escaping
+- ✅ Added needsShellQuoting() helper for special character detection
+- ✅ Added writeShellQuoted() for safe command construction
+
+**Provider Improvements:**
+- ✅ Added configurable max_tokens to Config struct with provider-specific defaults
+- ✅ Added getMaxTokens() helper method
+- ✅ Updated all payload functions to use configurable max_tokens
+
+**New Tests:**
+- ✅ CSI ?25h/l cursor visibility test
+- ✅ CSI ?7h/l autowrap mode test
+- ✅ DECSCUSR cursor style test
+- ✅ Shell quoting tests (buildCommandString, needsShellQuoting)
+
+**Verification:**
+- ✅ All 135+ tests passing
+- ✅ Build clean with `zig build -Doptimize=ReleaseSafe`
 
 ### Work Session 31 Highlights (2025-12-26)
 

@@ -161,31 +161,48 @@ pub const Config = struct {
     ollama_url: []const u8 = "http://localhost:11434",
 
     timeout_ms: u32 = 30000,
+
+    /// Maximum tokens for LLM response. Default varies by provider:
+    /// - Anthropic: 1024
+    /// - Gemini: 256
+    /// - OpenAI: 256
+    /// - Ollama: 256
+    max_tokens: ?u32 = null,
+
+    /// Get max tokens with provider-specific defaults
+    pub fn getMaxTokens(self: Config) u32 {
+        if (self.max_tokens) |t| return t;
+        return switch (self.provider) {
+            .anthropic => 1024,
+            .gemini, .openai, .ollama => 256,
+            .echo => 256,
+        };
+    }
 };
 
-fn anthropicPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8, user: []const u8) ![]u8 {
+fn anthropicPayload(alloc: std.mem.Allocator, model: []const u8, max_tokens: u32, sys: []const u8, user: []const u8) ![]u8 {
     const s = try jsonEscape(alloc, sys);
     defer alloc.free(s);
     const u = try jsonEscape(alloc, user);
     defer alloc.free(u);
 
     return std.fmt.allocPrint(alloc,
-        \\{{"model":"{s}","max_tokens":1024,"system":"{s}","messages":[{{"role":"user","content":"{s}"}}]}}
-    , .{ model, s, u });
+        \\{{"model":"{s}","max_tokens":{d},"system":"{s}","messages":[{{"role":"user","content":"{s}"}}]}}
+    , .{ model, max_tokens, s, u });
 }
 
-fn geminiPayload(alloc: std.mem.Allocator, sys: []const u8, user: []const u8) ![]u8 {
+fn geminiPayload(alloc: std.mem.Allocator, max_tokens: u32, sys: []const u8, user: []const u8) ![]u8 {
     const s = try jsonEscape(alloc, sys);
     defer alloc.free(s);
     const u = try jsonEscape(alloc, user);
     defer alloc.free(u);
 
     return std.fmt.allocPrint(alloc,
-        \\{{"contents":[{{"role":"user","parts":[{{"text":"{s}"}}]}}],"systemInstruction":{{"parts":[{{"text":"{s}"}}]}},"generationConfig":{{"temperature":0.3,"maxOutputTokens":256}}}}
-    , .{ u, s });
+        \\{{"contents":[{{"role":"user","parts":[{{"text":"{s}"}}]}}],"systemInstruction":{{"parts":[{{"text":"{s}"}}]}},"generationConfig":{{"temperature":0.3,"maxOutputTokens":{d}}}}}
+    , .{ u, s, max_tokens });
 }
 
-fn openaiPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8, user: []const u8) ![]u8 {
+fn openaiPayload(alloc: std.mem.Allocator, model: []const u8, max_tokens: u32, sys: []const u8, user: []const u8) ![]u8 {
     const s = try jsonEscape(alloc, sys);
     defer alloc.free(s);
     const u = try jsonEscape(alloc, user);
@@ -195,8 +212,8 @@ fn openaiPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8, u
     // Use "input" for the user prompt and "instructions" for the system prompt.
     // Responses API uses max_output_tokens instead of max_tokens.
     return std.fmt.allocPrint(alloc,
-        \\{{"model":"{s}","input":"{s}","instructions":"{s}","max_output_tokens":256,"temperature":0.3}}
-    , .{ model, u, s });
+        \\{{"model":"{s}","input":"{s}","instructions":"{s}","max_output_tokens":{d},"temperature":0.3}}
+    , .{ model, u, s, max_tokens });
 }
 
 fn ollamaPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8, user: []const u8) ![]u8 {
@@ -227,10 +244,12 @@ pub fn query(
         , .{ timestamp, query_text, timestamp });
     }
 
+    const max_tokens = cfg.getMaxTokens();
+
     const resp: http.Response = switch (cfg.provider) {
         .anthropic => blk: {
             if (cfg.anthropic_key == null) return error.MissingApiKey;
-            const body = try anthropicPayload(allocator, cfg.anthropic_model, system_prompt, query_text);
+            const body = try anthropicPayload(allocator, cfg.anthropic_model, max_tokens, system_prompt, query_text);
             defer allocator.free(body);
             const auth_header = try std.fmt.allocPrint(allocator, "x-api-key: {s}", .{cfg.anthropic_key.?});
             defer allocator.free(auth_header);
@@ -239,7 +258,7 @@ pub fn query(
         },
         .gemini => blk: {
             if (cfg.gemini_key == null) return error.MissingApiKey;
-            const body = try geminiPayload(allocator, system_prompt, query_text);
+            const body = try geminiPayload(allocator, max_tokens, system_prompt, query_text);
             defer allocator.free(body);
             const url = try std.fmt.allocPrint(allocator, "https://generativelanguage.googleapis.com/v1beta/models/{s}:generateContent?key={s}", .{ cfg.gemini_model, cfg.gemini_key.? });
             defer allocator.free(url);
@@ -247,7 +266,7 @@ pub fn query(
         },
         .openai => blk: {
             if (cfg.openai_key == null) return error.MissingApiKey;
-            const body = try openaiPayload(allocator, cfg.openai_model, system_prompt, query_text);
+            const body = try openaiPayload(allocator, cfg.openai_model, max_tokens, system_prompt, query_text);
             defer allocator.free(body);
             const header = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{cfg.openai_key.?});
             defer allocator.free(header);

@@ -264,6 +264,10 @@ pub const TerminalRuntime = struct {
     /// Whether we're currently in alternate screen mode
     is_alternate_screen: bool = false,
 
+    /// Autowrap mode: when cursor reaches right margin, wrap to next line
+    /// Controlled by CSI ?7h (set) and CSI ?7l (reset). Default: true.
+    autowrap_mode: bool = true,
+
     /// Initialize a new terminal runtime with the given configuration.
     ///
     /// Creates the framebuffer, initializes libghostty parsers (key encoder,
@@ -670,6 +674,7 @@ pub const TerminalRuntime = struct {
         var param_start: usize = 0;
         var param_buffer = std.ArrayList(u8){};
         defer param_buffer.deinit(self.allocator);
+        var intermediate_byte: u8 = 0; // For CSI sequences like "CSI n SP q" (DECSCUSR)
 
         for (bytes, 0..) |byte, i| {
             switch (state) {
@@ -749,14 +754,23 @@ pub const TerminalRuntime = struct {
                                     self.processPrivateMode(params_slice[1..], byte == 'h');
                                 }
                             },
+                            'q' => {
+                                // DECSCUSR (Set Cursor Style) - CSI Ps SP q
+                                if (intermediate_byte == ' ') {
+                                    self.processCursorStyle(params_slice);
+                                }
+                            },
                             else => {},
                         }
                         state = .normal;
+                        intermediate_byte = 0;
                     } else if (byte >= 0x30 and byte <= 0x3f) {
                         // Parameter bytes (0-9, :, ;, <, =, >, ?)
                         try param_buffer.append(self.allocator, byte);
+                    } else if (byte >= 0x20 and byte <= 0x2f) {
+                        // Intermediate bytes (space through /) - save for DECSCUSR etc.
+                        intermediate_byte = byte;
                     }
-                    // Intermediate bytes (0x20-0x2f) are collected but not used yet
                 },
                 .osc => {
                     // Feed byte to OSC parser (returns void; errors reported via osc_end)
@@ -843,12 +857,17 @@ pub const TerminalRuntime = struct {
         // Advance cursor
         self.cursor_col += 1;
         if (self.cursor_col >= self.cols) {
-            // Wrap to next line
-            self.cursor_col = 0;
-            self.cursor_row += 1;
-            if (self.cursor_row >= self.rows) {
-                try self.scrollUp();
-                self.cursor_row = self.rows - 1;
+            if (self.autowrap_mode) {
+                // Wrap to next line
+                self.cursor_col = 0;
+                self.cursor_row += 1;
+                if (self.cursor_row >= self.rows) {
+                    try self.scrollUp();
+                    self.cursor_row = self.rows - 1;
+                }
+            } else {
+                // Stay at last column (overwrite mode)
+                self.cursor_col = self.cols - 1;
             }
         }
     }
@@ -943,6 +962,59 @@ pub const TerminalRuntime = struct {
         }
     }
 
+    /// Process DECSCUSR (Set Cursor Style) - CSI Ps SP q
+    ///
+    /// Sets the cursor shape and blinking mode.
+    /// Parameter values:
+    /// - 0: Default (blinking block)
+    /// - 1: Blinking block
+    /// - 2: Steady block
+    /// - 3: Blinking underline
+    /// - 4: Steady underline
+    /// - 5: Blinking bar (I-beam)
+    /// - 6: Steady bar (I-beam)
+    fn processCursorStyle(self: *TerminalRuntime, params: []const u8) void {
+        const style_code: u8 = if (params.len > 0)
+            std.fmt.parseInt(u8, params, 10) catch 0
+        else
+            0;
+
+        switch (style_code) {
+            0, 1 => {
+                // Default or blinking block
+                self.cursor_style = .block;
+                self.cursor_blinking = true;
+            },
+            2 => {
+                // Steady block
+                self.cursor_style = .block;
+                self.cursor_blinking = false;
+            },
+            3 => {
+                // Blinking underline
+                self.cursor_style = .underline;
+                self.cursor_blinking = true;
+            },
+            4 => {
+                // Steady underline
+                self.cursor_style = .underline;
+                self.cursor_blinking = false;
+            },
+            5 => {
+                // Blinking bar (I-beam)
+                self.cursor_style = .bar;
+                self.cursor_blinking = true;
+            },
+            6 => {
+                // Steady bar (I-beam)
+                self.cursor_style = .bar;
+                self.cursor_blinking = false;
+            },
+            else => {},
+        }
+        std.log.debug("Cursor style: {} (blinking: {})", .{ @intFromEnum(self.cursor_style), self.cursor_blinking });
+    }
+
     /// Process CSI J (ED - Erase in Display)
     fn processEraseDisplay(self: *TerminalRuntime, params: []const u8) void {
         const mode: u8 = if (params.len > 0)
@@ -1029,10 +1101,29 @@ pub const TerminalRuntime = struct {
     }
 
     /// Process CSI private mode sequences (CSI ? Ps h/l)
+    ///
+    /// Handles DEC private modes for cursor visibility, autowrap, and screen buffers.
+    /// Modes are set with 'h' (high) and reset with 'l' (low).
+    ///
+    /// Supported modes:
+    /// - ?7: Autowrap mode (DECAWM) - wrap at right margin
+    /// - ?25: Cursor visibility (DECTCEM) - show/hide text cursor
+    /// - ?47: Alternate screen buffer (legacy)
+    /// - ?1049: Alternate screen buffer with save/restore cursor
     fn processPrivateMode(self: *TerminalRuntime, params: []const u8, set: bool) void {
         const mode = std.fmt.parseInt(u16, params, 10) catch return;
 
         switch (mode) {
+            7 => {
+                // DECAWM: Autowrap mode
+                self.autowrap_mode = set;
+                std.log.debug("Autowrap mode: {}", .{set});
+            },
+            25 => {
+                // DECTCEM: Text cursor enable mode (cursor visibility)
+                self.cursor_visible = set;
+                std.log.debug("Cursor visibility: {}", .{set});
+            },
             47, 1049 => {
                 // 47: Alternate screen buffer (legacy)
                 // 1049: Alternate screen buffer with save/restore cursor
@@ -2815,4 +2906,92 @@ test "SGR RGB color support" {
         },
         else => return error.ExpectedRgbColor,
     }
+}
+
+test "CSI ?25h/l cursor visibility" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // Cursor starts visible
+    try testing.expect(runtime.cursor_visible);
+
+    // Hide cursor with CSI ?25l
+    try runtime.feedBytes("\x1b[?25l");
+    try testing.expect(!runtime.cursor_visible);
+
+    // Show cursor with CSI ?25h
+    try runtime.feedBytes("\x1b[?25h");
+    try testing.expect(runtime.cursor_visible);
+}
+
+test "CSI ?7h/l autowrap mode" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 10, .rows = 5 });
+    defer runtime.shutdown();
+
+    // Autowrap starts enabled
+    try testing.expect(runtime.autowrap_mode);
+
+    // Write text that wraps
+    try runtime.feedBytes("1234567890A");
+    try testing.expectEqual(@as(u16, 1), runtime.cursor_col); // Wrapped to next line
+    try testing.expectEqual(@as(u16, 1), runtime.cursor_row);
+
+    // Disable autowrap
+    try runtime.feedBytes("\x1b[?7l");
+    try testing.expect(!runtime.autowrap_mode);
+
+    // Reset cursor and fill to end without wrapping
+    try runtime.feedBytes("\x1b[1;1H"); // Go to row 1, col 1
+    try runtime.feedBytes("ABCDEFGHIJXYZ"); // Last chars should overwrite at column 9
+    try testing.expectEqual(@as(u16, 9), runtime.cursor_col); // Stuck at last column
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_row); // Same row
+
+    // Re-enable autowrap
+    try runtime.feedBytes("\x1b[?7h");
+    try testing.expect(runtime.autowrap_mode);
+}
+
+test "DECSCUSR cursor style sequences" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // Default: blinking block
+    try testing.expectEqual(CursorStyle.block, runtime.cursor_style);
+    try testing.expect(runtime.cursor_blinking);
+
+    // Steady block (CSI 2 SP q)
+    try runtime.feedBytes("\x1b[2 q");
+    try testing.expectEqual(CursorStyle.block, runtime.cursor_style);
+    try testing.expect(!runtime.cursor_blinking);
+
+    // Blinking underline (CSI 3 SP q)
+    try runtime.feedBytes("\x1b[3 q");
+    try testing.expectEqual(CursorStyle.underline, runtime.cursor_style);
+    try testing.expect(runtime.cursor_blinking);
+
+    // Steady underline (CSI 4 SP q)
+    try runtime.feedBytes("\x1b[4 q");
+    try testing.expectEqual(CursorStyle.underline, runtime.cursor_style);
+    try testing.expect(!runtime.cursor_blinking);
+
+    // Blinking bar (CSI 5 SP q)
+    try runtime.feedBytes("\x1b[5 q");
+    try testing.expectEqual(CursorStyle.bar, runtime.cursor_style);
+    try testing.expect(runtime.cursor_blinking);
+
+    // Steady bar (CSI 6 SP q)
+    try runtime.feedBytes("\x1b[6 q");
+    try testing.expectEqual(CursorStyle.bar, runtime.cursor_style);
+    try testing.expect(!runtime.cursor_blinking);
+
+    // Default (CSI 0 SP q) - blinking block
+    try runtime.feedBytes("\x1b[0 q");
+    try testing.expectEqual(CursorStyle.block, runtime.cursor_style);
+    try testing.expect(runtime.cursor_blinking);
 }

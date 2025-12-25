@@ -1121,21 +1121,58 @@ pub const CommandPlanner = struct {
 
         const writer = parts.writer(self.allocator);
 
-        // Add environment variables
+        // Add environment variables (values are shell-quoted if needed)
         var env_it = plan.env.iterator();
         while (env_it.next()) |entry| {
-            try writer.print("{s}={s} ", .{ entry.key_ptr.*, entry.value_ptr.* });
+            try writer.print("{s}=", .{entry.key_ptr.*});
+            try self.writeShellQuoted(writer, entry.value_ptr.*);
+            try writer.writeByte(' ');
         }
 
-        // Add command
-        try writer.writeAll(plan.command);
+        // Add command (quote if contains special chars)
+        try self.writeShellQuoted(writer, plan.command);
 
-        // Add arguments
+        // Add arguments (each is shell-quoted if needed)
         for (plan.args) |arg| {
-            try writer.print(" {s}", .{arg});
+            try writer.writeByte(' ');
+            try self.writeShellQuoted(writer, arg);
         }
 
         return try parts.toOwnedSlice(self.allocator);
+    }
+
+    /// Check if a string needs shell quoting (contains special chars or spaces).
+    fn needsShellQuoting(s: []const u8) bool {
+        if (s.len == 0) return true; // Empty strings need quoting
+        for (s) |c| {
+            switch (c) {
+                ' ', '\t', '\n', '"', '\'', '\\', '$', '`', '!', '*', '?', '[', ']', '(', ')', '{', '}', '<', '>', '|', '&', ';', '#', '~', '^' => return true,
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    /// Write a string to the writer, shell-quoting it if necessary.
+    /// Uses single quotes for simplicity (only need to escape single quotes themselves).
+    fn writeShellQuoted(self: *CommandPlanner, writer: anytype, s: []const u8) !void {
+        _ = self;
+        if (!needsShellQuoting(s)) {
+            try writer.writeAll(s);
+            return;
+        }
+
+        // Use single quotes - only single quotes themselves need escaping
+        try writer.writeByte('\'');
+        for (s) |c| {
+            if (c == '\'') {
+                // End quote, add escaped quote, restart quote: 'foo'\''bar'
+                try writer.writeAll("'\\''");
+            } else {
+                try writer.writeByte(c);
+            }
+        }
+        try writer.writeByte('\'');
     }
 
     /// Inject command string as keystrokes
@@ -1818,4 +1855,58 @@ test "toJson serializes is_regex field" {
     defer testing.allocator.free(json);
 
     try testing.expect(std.mem.indexOf(u8, json, "\"is_regex\":true") != null);
+}
+
+test "buildCommandString - shell quoting" {
+    const testing = std.testing;
+
+    var runtime = try terminal_runtime.TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    var planner = CommandPlanner.init(testing.allocator, &runtime);
+    defer planner.deinit();
+
+    var env = std.StringHashMap([]const u8).init(testing.allocator);
+    defer env.deinit();
+    try env.put("MSG", "hello world"); // Value with space
+
+    const args = [_][]const u8{ "file with spaces.txt", "--name=O'Brien" };
+
+    const plan = CommandPlan{
+        .plan_id = "quote-test",
+        .command = "echo",
+        .args = &args,
+        .env = env,
+        .expectations = .{},
+        .failure_signals = .{},
+    };
+
+    const cmd_str = try planner.buildCommandString(&plan);
+    defer testing.allocator.free(cmd_str);
+
+    // Should quote filename with spaces
+    try testing.expect(std.mem.indexOf(u8, cmd_str, "'file with spaces.txt'") != null);
+    // Should escape single quotes properly
+    try testing.expect(std.mem.indexOf(u8, cmd_str, "'\\''") != null);
+    // Should quote env value with space
+    try testing.expect(std.mem.indexOf(u8, cmd_str, "'hello world'") != null);
+}
+
+test "needsShellQuoting - special characters" {
+    // Simple strings don't need quoting
+    try std.testing.expect(!CommandPlanner.needsShellQuoting("simple"));
+    try std.testing.expect(!CommandPlanner.needsShellQuoting("file.txt"));
+    try std.testing.expect(!CommandPlanner.needsShellQuoting("path/to/file"));
+
+    // Strings with special chars need quoting
+    try std.testing.expect(CommandPlanner.needsShellQuoting("hello world"));
+    try std.testing.expect(CommandPlanner.needsShellQuoting("file name.txt"));
+    try std.testing.expect(CommandPlanner.needsShellQuoting("$HOME"));
+    try std.testing.expect(CommandPlanner.needsShellQuoting("foo|bar"));
+    try std.testing.expect(CommandPlanner.needsShellQuoting("cmd;rm"));
+    try std.testing.expect(CommandPlanner.needsShellQuoting("test`pwd`"));
+    try std.testing.expect(CommandPlanner.needsShellQuoting("O'Brien"));
+
+    // Empty strings need quoting
+    try std.testing.expect(CommandPlanner.needsShellQuoting(""));
 }
