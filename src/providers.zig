@@ -394,3 +394,141 @@ test "queryWithRetry compiles and returns on first success" {
 
     try std.testing.expect(std.mem.indexOf(u8, result, "echo") != null);
 }
+
+test "jsonEscape - basic ASCII strings" {
+    const allocator = std.testing.allocator;
+
+    const result = try jsonEscape(allocator, "hello world");
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("hello world", result);
+}
+
+test "jsonEscape - empty string" {
+    const allocator = std.testing.allocator;
+
+    const result = try jsonEscape(allocator, "");
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "jsonEscape - quotes and backslashes" {
+    const allocator = std.testing.allocator;
+
+    const result = try jsonEscape(allocator, "say \"hello\" and use \\path");
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("say \\\"hello\\\" and use \\\\path", result);
+}
+
+test "jsonEscape - control characters" {
+    const allocator = std.testing.allocator;
+
+    const result = try jsonEscape(allocator, "line1\nline2\ttab\rcarriage");
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("line1\\nline2\\ttab\\rcarriage", result);
+}
+
+test "jsonEscape - backspace and form feed" {
+    const allocator = std.testing.allocator;
+
+    const result = try jsonEscape(allocator, "back\x08space\x0Cform");
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("back\\bspace\\fform", result);
+}
+
+test "jsonEscape - other control characters as unicode escapes" {
+    const allocator = std.testing.allocator;
+
+    const result = try jsonEscape(allocator, "null:\x00bell:\x07");
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("null:\\u0000bell:\\u0007", result);
+}
+
+test "jsonEscape - invalid UTF-8 sequences" {
+    const allocator = std.testing.allocator;
+
+    // Invalid continuation byte (0x80-0xBF not following a lead byte)
+    const result1 = try jsonEscape(allocator, "bad\x80byte");
+    defer allocator.free(result1);
+    try std.testing.expectEqualStrings("bad\\u0080byte", result1);
+
+    // Truncated UTF-8 sequence (lead byte without enough continuation bytes)
+    const result2 = try jsonEscape(allocator, "trunc\xC2");
+    defer allocator.free(result2);
+    try std.testing.expectEqualStrings("trunc\\u00c2", result2);
+}
+
+test "jsonEscape - valid UTF-8 multibyte" {
+    const allocator = std.testing.allocator;
+
+    const result = try jsonEscape(allocator, "emoji: 🎉");
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("emoji: 🎉", result);
+}
+
+test "trimSingleLineInPlace - removes newlines" {
+    var buf = [_]u8{ 'h', 'e', 'l', 'l', 'o', '\n', 'w', 'o', 'r', 'l', 'd' };
+    const result = trimSingleLineInPlace(&buf);
+
+    try std.testing.expectEqualStrings("helloworld", result);
+}
+
+test "trimSingleLineInPlace - removes CRLF" {
+    var buf = [_]u8{ 'l', 'i', 'n', 'e', '1', '\r', '\n', 'l', 'i', 'n', 'e', '2' };
+    const result = trimSingleLineInPlace(&buf);
+
+    try std.testing.expectEqualStrings("line1line2", result);
+}
+
+test "trimSingleLineInPlace - already clean string" {
+    var buf = [_]u8{ 'c', 'l', 'e', 'a', 'n' };
+    const result = trimSingleLineInPlace(&buf);
+
+    try std.testing.expectEqualStrings("clean", result);
+}
+
+test "trimSingleLineInPlace - empty string" {
+    var buf = [_]u8{};
+    const result = trimSingleLineInPlace(&buf);
+
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "trimSingleLineInPlace - trims trailing whitespace" {
+    var buf = [_]u8{ 't', 'e', 's', 't', ' ', '\t', ' ' };
+    const result = trimSingleLineInPlace(&buf);
+
+    try std.testing.expectEqualStrings("test", result);
+}
+
+test "Config.getMaxTokens - default values by provider" {
+    const anthropic_cfg = Config{ .provider = .anthropic };
+    try std.testing.expectEqual(@as(u32, 1024), anthropic_cfg.getMaxTokens());
+
+    const gemini_cfg = Config{ .provider = .gemini };
+    try std.testing.expectEqual(@as(u32, 256), gemini_cfg.getMaxTokens());
+
+    const openai_cfg = Config{ .provider = .openai };
+    try std.testing.expectEqual(@as(u32, 256), openai_cfg.getMaxTokens());
+
+    const ollama_cfg = Config{ .provider = .ollama };
+    try std.testing.expectEqual(@as(u32, 256), ollama_cfg.getMaxTokens());
+
+    const echo_cfg = Config{ .provider = .echo };
+    try std.testing.expectEqual(@as(u32, 256), echo_cfg.getMaxTokens());
+}
+
+test "Config.getMaxTokens - custom value overrides default" {
+    const cfg = Config{
+        .provider = .anthropic,
+        .max_tokens = 2048,
+    };
+
+    try std.testing.expectEqual(@as(u32, 2048), cfg.getMaxTokens());
+}

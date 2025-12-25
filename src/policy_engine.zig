@@ -1062,3 +1062,51 @@ test "policy engine - mouse shape rejected" {
     try testing.expectEqual(PolicyVerdict.reject, decision.verdict);
     try testing.expectEqual(@as(u64, 1), engine.stats.rejections);
 }
+
+test "getEnvBool - returns false for unset env var" {
+    try std.testing.expect(!getEnvBool("SLY_TEST_NONEXISTENT_VAR_12345"));
+}
+
+test "loadPolicyFromEnv - returns default when no env vars set" {
+    const config = loadPolicyFromEnv();
+    try std.testing.expect(config.allow_title_changes == DEFAULT_POLICY.allow_title_changes);
+    try std.testing.expect(config.confirm_osc52 == DEFAULT_POLICY.confirm_osc52);
+    try std.testing.expect(config.default_unknown == DEFAULT_POLICY.default_unknown);
+}
+
+test "loadPolicyFromEnv - SLY_POLICY_STRICT preset values" {
+    try std.testing.expect(!STRICT_POLICY.allow_osc52);
+    try std.testing.expect(STRICT_POLICY.confirm_title_changes);
+    try std.testing.expect(STRICT_POLICY.default_unknown == .reject);
+}
+
+test "loadPolicyFromEnv - SLY_POLICY_PERMISSIVE preset values" {
+    try std.testing.expect(PERMISSIVE_POLICY.allow_osc52);
+    try std.testing.expect(!PERMISSIVE_POLICY.confirm_osc52);
+    try std.testing.expect(PERMISSIVE_POLICY.allow_notifications);
+    try std.testing.expect(PERMISSIVE_POLICY.default_unknown == .allow);
+}
+
+test "loadPolicyFromEnv - SLY_ALLOW_OSC52 override logic" {
+    var config = DEFAULT_POLICY;
+    config.allow_osc52 = true;
+    config.confirm_osc52 = false;
+    try std.testing.expect(config.allow_osc52);
+    try std.testing.expect(!config.confirm_osc52);
+}
+
+test "loadPolicyFromEnv - SLY_BLOCK_NOTIFICATIONS override logic" {
+    var config = DEFAULT_POLICY;
+    config.allow_notifications = false;
+    config.confirm_notifications = false;
+    try std.testing.expect(!config.allow_notifications);
+    try std.testing.expect(!config.confirm_notifications);
+}
+
+test "loadPolicyFromEnv - SLY_ALLOW_PALETTE override logic" {
+    var config = DEFAULT_POLICY;
+    config.allow_palette_changes = true;
+    config.confirm_palette_changes = false;
+    try std.testing.expect(config.allow_palette_changes);
+    try std.testing.expect(!config.confirm_palette_changes);
+}
