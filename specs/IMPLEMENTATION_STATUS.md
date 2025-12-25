@@ -1,6 +1,6 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 44)
+**Last Updated:** 2025-12-26 (Work Session 45)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
@@ -32,7 +32,31 @@ This document tracks detailed implementation status for integrating libghostty-v
 
 **Overall Progress:** ~98% complete (all core functionality production-ready, awaiting real-world testing)
 
-## Recent Work Sessions (37-44)
+## Recent Work Sessions (37-45)
+
+### Work Session 45 (2025-12-26)
+
+**Critical Bug Fixes:**
+- ✅ Fixed libghostty key constants: Changed from incorrect USB HID scancodes (0x28, 0x29, etc.) to proper GhosttyKey C API enum values (c.GHOSTTY_KEY_ENTER, c.GHOSTTY_KEY_ESCAPE, etc.)
+- ✅ Fixed memory leak in command_planner.zig executePlan: injectKey result was discarded without freeing
+- ✅ Added comprehensive key bindings for A-Z and 0-9 digit keys
+
+**Key Encoding Fix Details:**
+- Previous: Hardcoded values like `KEY_RETURN: u32 = 0x28` (USB HID scancode)
+- Fixed: Using C API enum values like `KEY_ENTER = c.GHOSTTY_KEY_ENTER`
+- The GhosttyKey enum is a sequential W3C-based enum, not USB HID scancodes
+
+**Verification Pass:**
+- ✅ All unit tests passing (111 tests across 6 modules)
+- ✅ Build clean with `zig build -Doptimize=ReleaseSafe`
+- ✅ Shell plugins verified synchronized (zsh, bash, fish in lib/ and src/)
+- ✅ Memory leak fixed and verified
+
+**Status:**
+- Core implementation 100% complete (Phases 0-7)
+- All unit tests passing
+- Key encoding now uses correct GhosttyKey enum values
+- Latest tag: v0.1.30
 
 ### Work Session 44 (2025-12-26)
 

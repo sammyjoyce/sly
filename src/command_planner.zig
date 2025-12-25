@@ -1024,11 +1024,12 @@ pub const CommandPlanner = struct {
         std.log.debug("Keystream hash: {x}", .{audit.keystream_hash});
 
         // Simulate Enter key to execute (in real implementation, this would be PTY write)
-        _ = try self.runtime.injectKey(
+        const enter_key = try self.runtime.injectKey(
             ghostty.KEY_ACTION_PRESS,
-            13, // Enter key
+            @intCast(ghostty.KEY_ENTER),
             0, // No modifiers
         );
+        self.allocator.free(enter_key);
 
         // Check timeout before final snapshot
         if (plan.timeout_ms) |timeout| {

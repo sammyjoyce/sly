@@ -140,40 +140,89 @@ pub const paste_is_safe = c.ghostty_paste_is_safe;
 pub const Color = c.GhosttyColor;
 pub const ColorRGB = c.GhosttyColorRGB;
 
-// Key codes (USB HID scancodes)
-// Common keys
-pub const KEY_RETURN: u32 = 0x28;
-pub const KEY_ESCAPE: u32 = 0x29;
-pub const KEY_BACKSPACE: u32 = 0x2A;
-pub const KEY_TAB: u32 = 0x2B;
-pub const KEY_SPACE: u32 = 0x2C;
-pub const KEY_DELETE: u32 = 0x4C;
+// Key codes - using proper GhosttyKey enum from C API
+// The GhosttyKey enum is a sequential enum based on W3C UI Events KeyboardEvent code standard
+pub const Key = c.GhosttyKey;
+
+// Common keys (from GhosttyKey enum in event.h)
+pub const KEY_ENTER = c.GHOSTTY_KEY_ENTER;
+pub const KEY_RETURN = c.GHOSTTY_KEY_ENTER; // Alias for compatibility
+pub const KEY_ESCAPE = c.GHOSTTY_KEY_ESCAPE;
+pub const KEY_BACKSPACE = c.GHOSTTY_KEY_BACKSPACE;
+pub const KEY_TAB = c.GHOSTTY_KEY_TAB;
+pub const KEY_SPACE = c.GHOSTTY_KEY_SPACE;
+pub const KEY_DELETE = c.GHOSTTY_KEY_DELETE;
 
 // Navigation keys
-pub const KEY_HOME: u32 = 0x4A;
-pub const KEY_PAGE_UP: u32 = 0x4B;
-pub const KEY_END: u32 = 0x4D;
-pub const KEY_PAGE_DOWN: u32 = 0x4E;
+pub const KEY_HOME = c.GHOSTTY_KEY_HOME;
+pub const KEY_PAGE_UP = c.GHOSTTY_KEY_PAGE_UP;
+pub const KEY_END = c.GHOSTTY_KEY_END;
+pub const KEY_PAGE_DOWN = c.GHOSTTY_KEY_PAGE_DOWN;
 
 // Arrow keys
-pub const KEY_RIGHT: u32 = 0x4F;
-pub const KEY_LEFT: u32 = 0x50;
-pub const KEY_DOWN: u32 = 0x51;
-pub const KEY_UP: u32 = 0x52;
+pub const KEY_ARROW_DOWN = c.GHOSTTY_KEY_ARROW_DOWN;
+pub const KEY_ARROW_LEFT = c.GHOSTTY_KEY_ARROW_LEFT;
+pub const KEY_ARROW_RIGHT = c.GHOSTTY_KEY_ARROW_RIGHT;
+pub const KEY_ARROW_UP = c.GHOSTTY_KEY_ARROW_UP;
+// Legacy aliases for compatibility
+pub const KEY_DOWN = c.GHOSTTY_KEY_ARROW_DOWN;
+pub const KEY_LEFT = c.GHOSTTY_KEY_ARROW_LEFT;
+pub const KEY_RIGHT = c.GHOSTTY_KEY_ARROW_RIGHT;
+pub const KEY_UP = c.GHOSTTY_KEY_ARROW_UP;
 
 // Function keys (F1-F12)
-pub const KEY_F1: u32 = 0x3A;
-pub const KEY_F2: u32 = 0x3B;
-pub const KEY_F3: u32 = 0x3C;
-pub const KEY_F4: u32 = 0x3D;
-pub const KEY_F5: u32 = 0x3E;
-pub const KEY_F6: u32 = 0x3F;
-pub const KEY_F7: u32 = 0x40;
-pub const KEY_F8: u32 = 0x41;
-pub const KEY_F9: u32 = 0x42;
-pub const KEY_F10: u32 = 0x43;
-pub const KEY_F11: u32 = 0x44;
-pub const KEY_F12: u32 = 0x45;
+pub const KEY_F1 = c.GHOSTTY_KEY_F1;
+pub const KEY_F2 = c.GHOSTTY_KEY_F2;
+pub const KEY_F3 = c.GHOSTTY_KEY_F3;
+pub const KEY_F4 = c.GHOSTTY_KEY_F4;
+pub const KEY_F5 = c.GHOSTTY_KEY_F5;
+pub const KEY_F6 = c.GHOSTTY_KEY_F6;
+pub const KEY_F7 = c.GHOSTTY_KEY_F7;
+pub const KEY_F8 = c.GHOSTTY_KEY_F8;
+pub const KEY_F9 = c.GHOSTTY_KEY_F9;
+pub const KEY_F10 = c.GHOSTTY_KEY_F10;
+pub const KEY_F11 = c.GHOSTTY_KEY_F11;
+pub const KEY_F12 = c.GHOSTTY_KEY_F12;
+
+// Letter keys (A-Z)
+pub const KEY_A = c.GHOSTTY_KEY_A;
+pub const KEY_B = c.GHOSTTY_KEY_B;
+pub const KEY_C = c.GHOSTTY_KEY_C;
+pub const KEY_D = c.GHOSTTY_KEY_D;
+pub const KEY_E = c.GHOSTTY_KEY_E;
+pub const KEY_F = c.GHOSTTY_KEY_F;
+pub const KEY_G = c.GHOSTTY_KEY_G;
+pub const KEY_H = c.GHOSTTY_KEY_H;
+pub const KEY_I = c.GHOSTTY_KEY_I;
+pub const KEY_J = c.GHOSTTY_KEY_J;
+pub const KEY_K = c.GHOSTTY_KEY_K;
+pub const KEY_L = c.GHOSTTY_KEY_L;
+pub const KEY_M = c.GHOSTTY_KEY_M;
+pub const KEY_N = c.GHOSTTY_KEY_N;
+pub const KEY_O = c.GHOSTTY_KEY_O;
+pub const KEY_P = c.GHOSTTY_KEY_P;
+pub const KEY_Q = c.GHOSTTY_KEY_Q;
+pub const KEY_R = c.GHOSTTY_KEY_R;
+pub const KEY_S = c.GHOSTTY_KEY_S;
+pub const KEY_T = c.GHOSTTY_KEY_T;
+pub const KEY_U = c.GHOSTTY_KEY_U;
+pub const KEY_V = c.GHOSTTY_KEY_V;
+pub const KEY_W = c.GHOSTTY_KEY_W;
+pub const KEY_X = c.GHOSTTY_KEY_X;
+pub const KEY_Y = c.GHOSTTY_KEY_Y;
+pub const KEY_Z = c.GHOSTTY_KEY_Z;
+
+// Digit keys (0-9)
+pub const KEY_DIGIT_0 = c.GHOSTTY_KEY_DIGIT_0;
+pub const KEY_DIGIT_1 = c.GHOSTTY_KEY_DIGIT_1;
+pub const KEY_DIGIT_2 = c.GHOSTTY_KEY_DIGIT_2;
+pub const KEY_DIGIT_3 = c.GHOSTTY_KEY_DIGIT_3;
+pub const KEY_DIGIT_4 = c.GHOSTTY_KEY_DIGIT_4;
+pub const KEY_DIGIT_5 = c.GHOSTTY_KEY_DIGIT_5;
+pub const KEY_DIGIT_6 = c.GHOSTTY_KEY_DIGIT_6;
+pub const KEY_DIGIT_7 = c.GHOSTTY_KEY_DIGIT_7;
+pub const KEY_DIGIT_8 = c.GHOSTTY_KEY_DIGIT_8;
+pub const KEY_DIGIT_9 = c.GHOSTTY_KEY_DIGIT_9;
 
 // Key encoding functions
 pub const key_encoder_new = c.ghostty_key_encoder_new;
