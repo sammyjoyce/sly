@@ -419,9 +419,11 @@ pub fn query(
 ) ![]u8 {
     if (cfg.provider == .echo) {
         const timestamp = std.time.milliTimestamp();
+        const escaped_query = try jsonEscape(allocator, query_text);
+        defer allocator.free(escaped_query);
         return std.fmt.allocPrint(allocator,
             \\{{"plan_id":"echo-{d}","command":"echo","args":["{s}"],"env":{{}},"stdin":null,"paste_policy":"auto","confirm_mode":"auto","expectations":[],"failure_signals":[],"created_at":{d}}}
-        , .{ timestamp, query_text, timestamp });
+        , .{ timestamp, escaped_query, timestamp });
     }
 
     const max_tokens = cfg.getMaxTokens();
