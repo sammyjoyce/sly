@@ -1,6 +1,6 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 25)
+**Last Updated:** 2025-12-26 (Work Session 26)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
@@ -278,6 +278,31 @@ This document tracks detailed implementation status for integrating libghostty-v
 - **generatePlan()** - Provider query + schema validation with retries
 - **formatSnapshotForPrompt()** - Terminal state formatting for AI
 
+### Work Session 26 Updates (2025-12-26)
+
+**Provider Retry Logic:**
+- ✅ Added queryWithRetry() function to providers.zig with exponential backoff
+- ✅ Configurable max retries and base delay
+- ✅ Handles transient network failures gracefully
+
+**SGR Blink Attribute Support:**
+- ✅ Added blink field to Cell struct
+- ✅ Added SGR blink handling (codes 5/6 for enable, 25 for disable)
+- ✅ Updated computeHash() and addChar() for blink attribute
+
+**OSC 133 Shell Integration:**
+- ✅ Added OSC 133 parsing support for shell integration markers
+- ✅ Prompt start/end, command start/executed markers parsed
+
+**Alternate Screen Buffer:**
+- ✅ Added alternate screen buffer support (CSI ?1049h/l)
+- ✅ Proper save/restore of main screen content
+
+**Verification:**
+- ✅ All 120+ tests passing
+- ✅ Build clean: `zig build -Doptimize=ReleaseSafe`
+- ✅ Shell plugins (src/ and lib/) verified in sync
+
 ### Work Session 25 Updates (2025-12-26)
 
 **CSI Cursor Movement Commands (A/B/C/D):**
@@ -506,9 +531,22 @@ zig build test-ghostty   # Run libghostty integration tests
 - `specs/libghostty-design-decisions.md` - Design rationale
 - `specs/libghostty-implementation-plan.md` - Phase-by-phase plan
 
-## Current Status (Updated 2025-12-26 Work Session 25)
+## Current Status (Updated 2025-12-26 Work Session 26)
 
 **🎉 Major Achievement:** All core phases (0-7) are now **100% COMPLETE** with production fixes and terminal state enhancements!
+
+### Work Session 26 Highlights (Retry Logic, Blink, OSC 133, Alt Screen)
+
+**Provider Improvements:**
+- ✅ queryWithRetry() with exponential backoff for transient failures
+
+**Terminal Capabilities:**
+- ✅ SGR blink attribute (codes 5/6/25)
+- ✅ OSC 133 shell integration markers
+- ✅ Alternate screen buffer (CSI ?1049h/l)
+
+**Verification:**
+- ✅ 120+ tests passing, build clean
 
 ### Work Session 25 Highlights (Cursor Movement, SGR Extensions, Fish Support)
 

@@ -72,6 +72,7 @@ pub const Cell = struct {
     underline: ghostty.SgrUnderline = 0, // GHOSTTY_SGR_UNDERLINE_NONE
     inverse: bool = false,
     strikethrough: bool = false,
+    blink: bool = false,
 };
 
 /// Color representation supporting 8-color, 256-color, and RGB
@@ -154,6 +155,12 @@ pub const TerminalRuntime = struct {
 
     /// Current styling attributes (applied to new characters)
     current_style: Cell = .{},
+
+    /// Alternate screen buffer (used by vim, less, etc.)
+    alternate_framebuffer: ?std.ArrayList(std.ArrayList(Cell)) = null,
+
+    /// Whether we're currently in alternate screen mode
+    is_alternate_screen: bool = false,
 
     /// Initialize a new terminal runtime
     pub fn init(allocator: std.mem.Allocator, params: InitParams) !TerminalRuntime {
@@ -262,6 +269,15 @@ pub const TerminalRuntime = struct {
             row.deinit(self.allocator);
         }
         self.framebuffer.deinit(self.allocator);
+
+        // Clean up alternate framebuffer if present
+        if (self.alternate_framebuffer) |*alt_fb| {
+            for (alt_fb.items) |*row| {
+                row.deinit(self.allocator);
+            }
+            alt_fb.deinit(self.allocator);
+            self.alternate_framebuffer = null;
+        }
 
         // Clean up scrollback
         for (self.scrollback.items) |*row| {
@@ -556,6 +572,12 @@ pub const TerminalRuntime = struct {
                                 // CUB (Cursor Back/Left)
                                 self.processCursorBack(params_slice);
                             },
+                            'h', 'l' => {
+                                // Private mode set/reset (CSI ? Ps h/l)
+                                if (params_slice.len > 0 and params_slice[0] == '?') {
+                                    self.processPrivateMode(params_slice[1..], byte == 'h');
+                                }
+                            },
                             else => {},
                         }
                         state = .normal;
@@ -645,6 +667,7 @@ pub const TerminalRuntime = struct {
             .underline = self.current_style.underline,
             .inverse = self.current_style.inverse,
             .strikethrough = self.current_style.strikethrough,
+            .blink = self.current_style.blink,
         };
 
         // Advance cursor
@@ -835,6 +858,79 @@ pub const TerminalRuntime = struct {
         }
     }
 
+    /// Process CSI private mode sequences (CSI ? Ps h/l)
+    fn processPrivateMode(self: *TerminalRuntime, params: []const u8, set: bool) void {
+        const mode = std.fmt.parseInt(u16, params, 10) catch return;
+
+        switch (mode) {
+            47, 1049 => {
+                // 47: Alternate screen buffer (legacy)
+                // 1049: Alternate screen buffer with save/restore cursor
+                if (set) {
+                    self.switchToAlternateScreen();
+                } else {
+                    self.switchToMainScreen();
+                }
+            },
+            else => {},
+        }
+    }
+
+    /// Switch to alternate screen buffer (saves main screen)
+    pub fn switchToAlternateScreen(self: *TerminalRuntime) void {
+        if (self.is_alternate_screen) return;
+
+        // Save current framebuffer as alternate (swap semantics)
+        self.alternate_framebuffer = self.framebuffer;
+        self.is_alternate_screen = true;
+
+        // Create fresh framebuffer for alternate screen
+        self.framebuffer = std.ArrayList(std.ArrayList(Cell)){};
+        for (0..self.rows) |_| {
+            var row = std.ArrayList(Cell).initCapacity(self.allocator, self.cols) catch return;
+            row.appendNTimesAssumeCapacity(Cell{}, self.cols);
+            self.framebuffer.append(self.allocator, row) catch {
+                row.deinit(self.allocator);
+                return;
+            };
+        }
+
+        // Reset cursor position for alternate screen
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+
+        std.log.debug("Switched to alternate screen buffer", .{});
+    }
+
+    /// Switch back to main screen buffer (restores saved screen)
+    pub fn switchToMainScreen(self: *TerminalRuntime) void {
+        if (!self.is_alternate_screen) return;
+
+        // Clean up current (alternate) framebuffer
+        for (self.framebuffer.items) |*row| {
+            row.deinit(self.allocator);
+        }
+        self.framebuffer.deinit(self.allocator);
+
+        // Restore main framebuffer
+        if (self.alternate_framebuffer) |saved| {
+            self.framebuffer = saved;
+            self.alternate_framebuffer = null;
+        }
+
+        self.is_alternate_screen = false;
+
+        // Clamp cursor to screen bounds
+        if (self.cursor_row >= self.rows) {
+            self.cursor_row = if (self.rows > 0) self.rows - 1 else 0;
+        }
+        if (self.cursor_col >= self.cols) {
+            self.cursor_col = if (self.cols > 0) self.cols - 1 else 0;
+        }
+
+        std.log.debug("Switched to main screen buffer", .{});
+    }
+
     /// Scroll the framebuffer up by one line, moving top row to scrollback
     fn scrollUp(self: *TerminalRuntime) !void {
         if (self.framebuffer.items.len > 0) {
@@ -935,6 +1031,12 @@ pub const TerminalRuntime = struct {
                 ghostty.SGR_ATTR_RESET_STRIKETHROUGH => {
                     self.current_style.strikethrough = false;
                 },
+                ghostty.SGR_ATTR_BLINK => {
+                    self.current_style.blink = true;
+                },
+                ghostty.SGR_ATTR_RESET_BLINK => {
+                    self.current_style.blink = false;
+                },
                 ghostty.SGR_ATTR_FG_8 => {
                     self.current_style.fg_color = .{ .indexed = attr.value.fg_8 };
                 },
@@ -989,10 +1091,19 @@ pub const TerminalRuntime = struct {
                     payload = title;
                 }
             },
-            else => {
-                // Other OSC types don't have data extraction implemented yet
-                // Will be expanded as libghostty adds more data accessors
+            ghostty.OSC_COMMAND_PROMPT_START => {
+                std.log.debug("OSC 133;A - Prompt Start marker received", .{});
             },
+            ghostty.OSC_COMMAND_PROMPT_END => {
+                std.log.debug("OSC 133;B - Prompt End marker received", .{});
+            },
+            ghostty.OSC_COMMAND_END_OF_INPUT => {
+                std.log.debug("OSC 133;C - End of Input marker received", .{});
+            },
+            ghostty.OSC_COMMAND_END_OF_COMMAND => {
+                std.log.debug("OSC 133;D - End of Command marker received", .{});
+            },
+            else => {},
         }
 
         // Evaluate policy
@@ -1241,6 +1352,7 @@ pub const TerminalRuntime = struct {
                 hasher.update(&[_]u8{underline_val});
                 hasher.update(&[_]u8{@intFromBool(cell.inverse)});
                 hasher.update(&[_]u8{@intFromBool(cell.strikethrough)});
+                hasher.update(&[_]u8{@intFromBool(cell.blink)});
             }
         }
 
@@ -1495,6 +1607,53 @@ test "sgr parser - bold and red foreground" {
 
     try testing.expect(found_bold);
     try testing.expect(found_red);
+}
+
+test "sgr parser - blink attribute" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // Parse "slow blink" sequence: ESC[5m
+    const params = [_]u16{5};
+    const result = ghostty.sgr_set_params(
+        runtime.sgr_parser,
+        &params,
+        null,
+        params.len,
+    );
+    try testing.expect(ghostty.isSuccess(result));
+
+    var attr: ghostty.SgrAttribute = undefined;
+    var found_blink = false;
+
+    while (ghostty.sgr_next(runtime.sgr_parser, &attr)) {
+        if (attr.tag == ghostty.SGR_ATTR_BLINK) {
+            found_blink = true;
+        }
+    }
+
+    try testing.expect(found_blink);
+
+    // Test reset blink: ESC[25m
+    const reset_params = [_]u16{25};
+    const reset_result = ghostty.sgr_set_params(
+        runtime.sgr_parser,
+        &reset_params,
+        null,
+        reset_params.len,
+    );
+    try testing.expect(ghostty.isSuccess(reset_result));
+
+    var found_reset_blink = false;
+    while (ghostty.sgr_next(runtime.sgr_parser, &attr)) {
+        if (attr.tag == ghostty.SGR_ATTR_RESET_BLINK) {
+            found_reset_blink = true;
+        }
+    }
+
+    try testing.expect(found_reset_blink);
 }
 
 test "osc parser - window title change" {
@@ -2139,4 +2298,52 @@ test "SGR faint, inverse, strikethrough" {
     try testing.expect(!runtime.framebuffer.items[0].items[3].faint);
     try testing.expect(!runtime.framebuffer.items[0].items[3].inverse);
     try testing.expect(!runtime.framebuffer.items[0].items[3].strikethrough);
+}
+
+test "alternate screen buffer switching" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 20, .rows = 5 });
+    defer runtime.shutdown();
+
+    // Write content to main screen
+    try runtime.feedBytes("Main Screen");
+    try testing.expectEqual(@as(u8, 'M'), runtime.framebuffer.items[0].items[0].char);
+    try testing.expect(!runtime.is_alternate_screen);
+
+    // Switch to alternate screen via CSI ?1049h
+    try runtime.feedBytes("\x1b[?1049h");
+    try testing.expect(runtime.is_alternate_screen);
+
+    // Alternate screen should be blank
+    try testing.expectEqual(@as(u8, ' '), runtime.framebuffer.items[0].items[0].char);
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_row);
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_col);
+
+    // Write to alternate screen
+    try runtime.feedBytes("Alt Screen");
+    try testing.expectEqual(@as(u8, 'A'), runtime.framebuffer.items[0].items[0].char);
+
+    // Switch back to main screen via CSI ?1049l
+    try runtime.feedBytes("\x1b[?1049l");
+    try testing.expect(!runtime.is_alternate_screen);
+
+    // Main screen content should be restored
+    try testing.expectEqual(@as(u8, 'M'), runtime.framebuffer.items[0].items[0].char);
+    try testing.expectEqual(@as(u8, 'a'), runtime.framebuffer.items[0].items[1].char);
+}
+
+test "alternate screen buffer - legacy mode 47" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 20, .rows = 5 });
+    defer runtime.shutdown();
+
+    try runtime.feedBytes("Original");
+    try runtime.feedBytes("\x1b[?47h");
+    try testing.expect(runtime.is_alternate_screen);
+
+    try runtime.feedBytes("\x1b[?47l");
+    try testing.expect(!runtime.is_alternate_screen);
+    try testing.expectEqual(@as(u8, 'O'), runtime.framebuffer.items[0].items[0].char);
 }

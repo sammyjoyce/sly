@@ -303,3 +303,67 @@ pub fn query(
 
     return error.BadResponse;
 }
+
+/// Check if an error is transient (network-related) and worth retrying
+fn isTransientError(err: anyerror) bool {
+    return switch (err) {
+        error.Network,
+        error.Unavailable,
+        error.BadResponse,
+        error.ConnectionRefused,
+        error.ConnectionResetByPeer,
+        error.ConnectionTimedOut,
+        error.TemporaryNameServerFailure,
+        error.NameServerFailure,
+        => true,
+        else => false,
+    };
+}
+
+/// Query a provider with retry logic and exponential backoff.
+/// Returns the CommandPlan JSON string extracted from the provider's response.
+/// The caller is responsible for freeing the returned string.
+pub fn queryWithRetry(
+    allocator: std.mem.Allocator,
+    cfg: Config,
+    query_text: []const u8,
+    system_prompt: []const u8,
+    max_retries: u8,
+) ![]u8 {
+    const base_delay_ms: u64 = 500;
+    var attempt: u8 = 0;
+
+    while (true) : (attempt += 1) {
+        const result = query(allocator, cfg, query_text, system_prompt);
+
+        if (result) |response| {
+            return response;
+        } else |err| {
+            if (!isTransientError(err) or attempt >= max_retries) {
+                return err;
+            }
+
+            const delay_ms = base_delay_ms * (@as(u64, 1) << @intCast(attempt));
+            std.log.warn("Query attempt {d}/{d} failed with {s}, retrying in {d}ms...", .{
+                attempt + 1,
+                max_retries + 1,
+                @errorName(err),
+                delay_ms,
+            });
+
+            std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+        }
+    }
+}
+
+test "queryWithRetry compiles and returns on first success" {
+    const allocator = std.testing.allocator;
+    const cfg = Config{
+        .provider = .echo,
+    };
+
+    const result = try queryWithRetry(allocator, cfg, "test query", "system prompt", 3);
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "echo") != null);
+}
