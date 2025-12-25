@@ -298,6 +298,18 @@ This document tracks detailed implementation status for integrating libghostty-v
 - ✅ Added alternate screen buffer support (CSI ?1049h/l)
 - ✅ Proper save/restore of main screen content
 
+**Shell Plugin Parity (bash & fish):**
+- ✅ Added SLY_SPINNER support to bash plugin (lib/bash-sly.plugin.sh)
+- ✅ Added SLY_SPINNER support to fish plugin (lib/sly.plugin.fish)
+- ✅ Verified terminal snapshot context already integrated with AI providers
+- ✅ All shell plugins (zsh, bash, fish) now have consistent features:
+  - SLY_TIMEOUT - configurable command timeout
+  - SLY_SPINNER - show/hide spinner during AI generation
+  - SLY_COLOR - enable/disable colored output
+  - CommandPlan JSON parsing with jq and fallback
+  - Timeout handling with portable timeout function
+  - Error messages for missing dependencies
+
 **Verification:**
 - ✅ All 120+ tests passing
 - ✅ Build clean: `zig build -Doptimize=ReleaseSafe`
