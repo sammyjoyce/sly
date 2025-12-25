@@ -9,6 +9,25 @@
 #   SLY_COLOR       - Enable/disable color output (default: 1)
 #   SLY_BASH_ENTER  - Enable Enter key override (default: 0)
 
+# Portable timeout function (supports Linux timeout, macOS gtimeout, or fallback)
+__sly_run_with_timeout() {
+  local timeout_secs="$1"
+  shift
+  
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$timeout_secs" "$@"
+  else
+    # No timeout available, run directly (warn once)
+    if [[ -z "$_SLY_TIMEOUT_WARNED" ]]; then
+      printf '\e[33m%s\e[0m\n' "⚠ sly: timeout command not found, running without timeout" >&2
+      _SLY_TIMEOUT_WARNED=1
+    fi
+    "$@"
+  fi
+}
+
 __sly_expand() {
   # Only transform if line starts with "# "
   if [[ ${READLINE_LINE} == "# "* ]]; then
@@ -38,18 +57,12 @@ __sly_expand() {
       context="${context}${context:+$'\n'}Current buffer: $READLINE_LINE"
     fi
     
-    # Use timeout wrapper if available
-    local timeout_cmd=""
-    if command -v timeout >/dev/null 2>&1; then
-      timeout_cmd="timeout $timeout_val"
-    fi
-    
     # Call sly plan with context if available
     local rc=0
     if [[ -n "$context" ]]; then
-      plan_json="$($timeout_cmd sly plan --query "$q" --context "$context" 2>/dev/null)"; rc=$?
+      plan_json="$(__sly_run_with_timeout "$timeout_val" sly plan --query "$q" --context "$context" 2>/dev/null)"; rc=$?
     else
-      plan_json="$($timeout_cmd sly plan --query "$q" 2>/dev/null)"; rc=$?
+      plan_json="$(__sly_run_with_timeout "$timeout_val" sly plan --query "$q" 2>/dev/null)"; rc=$?
     fi
     
     # Check for timeout (exit code 124)

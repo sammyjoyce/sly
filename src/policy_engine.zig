@@ -82,6 +82,43 @@ pub const PolicyConfig = struct {
     default_unknown: PolicyVerdict = .confirm,
 };
 
+/// Default (balanced) policy preset
+pub const DEFAULT_POLICY = PolicyConfig{};
+
+/// Strict policy preset - requires confirmation for most operations
+pub const STRICT_POLICY = PolicyConfig{
+    .allow_title_changes = true,
+    .confirm_title_changes = true,
+    .allow_hyperlinks = true,
+    .confirm_hyperlinks = true,
+    .allow_palette_changes = false,
+    .confirm_palette_changes = false,
+    .allow_osc52 = false,
+    .confirm_osc52 = false,
+    .allow_current_directory = true,
+    .allow_shell_integration = true,
+    .allow_notifications = false,
+    .confirm_notifications = false,
+    .default_unknown = .reject,
+};
+
+/// Permissive policy preset - allows most operations without confirmation
+pub const PERMISSIVE_POLICY = PolicyConfig{
+    .allow_title_changes = true,
+    .confirm_title_changes = false,
+    .allow_hyperlinks = true,
+    .confirm_hyperlinks = false,
+    .allow_palette_changes = true,
+    .confirm_palette_changes = false,
+    .allow_osc52 = true,
+    .confirm_osc52 = false,
+    .allow_current_directory = true,
+    .allow_shell_integration = true,
+    .allow_notifications = true,
+    .confirm_notifications = false,
+    .default_unknown = .allow,
+};
+
 /// Policy Engine manages security policies for terminal operations
 pub const PolicyEngine = struct {
     allocator: std.mem.Allocator,
@@ -382,6 +419,39 @@ pub const PolicyStats = struct {
     }
 };
 
+/// Load policy configuration from environment variables
+pub fn loadPolicyFromEnv() PolicyConfig {
+    var config = PolicyConfig{};
+
+    if (getEnvBool("SLY_POLICY_STRICT")) {
+        config = STRICT_POLICY;
+    } else if (getEnvBool("SLY_POLICY_PERMISSIVE")) {
+        config = PERMISSIVE_POLICY;
+    }
+
+    if (getEnvBool("SLY_ALLOW_OSC52")) {
+        config.allow_osc52 = true;
+        config.confirm_osc52 = false;
+    }
+
+    if (getEnvBool("SLY_BLOCK_NOTIFICATIONS")) {
+        config.allow_notifications = false;
+        config.confirm_notifications = false;
+    }
+
+    if (getEnvBool("SLY_ALLOW_PALETTE")) {
+        config.allow_palette_changes = true;
+        config.confirm_palette_changes = false;
+    }
+
+    return config;
+}
+
+fn getEnvBool(name: []const u8) bool {
+    const val = std.posix.getenv(name) orelse return false;
+    return std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "yes");
+}
+
 // Tests
 test "policy engine - allow title changes" {
     const testing = std.testing;
@@ -558,4 +628,24 @@ test "policy engine - statistics tracking" {
     try testing.expectEqual(@as(u64, 1), stats.allows);
     try testing.expectEqual(@as(u64, 1), stats.confirmations);
     try testing.expectEqual(@as(u64, 1), stats.rejections);
+}
+
+test "DEFAULT_POLICY allows safe operations" {
+    const policy = DEFAULT_POLICY;
+    try std.testing.expect(policy.allow_title_changes);
+    try std.testing.expect(policy.allow_shell_integration);
+    try std.testing.expect(!policy.confirm_title_changes);
+}
+
+test "STRICT_POLICY blocks clipboard" {
+    const policy = STRICT_POLICY;
+    try std.testing.expect(!policy.allow_osc52);
+    try std.testing.expect(policy.default_unknown == .reject);
+}
+
+test "PERMISSIVE_POLICY allows most operations" {
+    const policy = PERMISSIVE_POLICY;
+    try std.testing.expect(policy.allow_notifications);
+    try std.testing.expect(!policy.confirm_osc52);
+    try std.testing.expect(policy.default_unknown == .allow);
 }

@@ -21,12 +21,10 @@ pub const ConfirmMode = enum {
 
 /// Expected outcome after plan execution
 pub const Expectation = struct {
-    /// Expected pattern in framebuffer/output (regex-like)
-    pattern: ?[]const u8 = null,
-    /// Expected exit code
-    exit_code: ?i32 = null,
-    /// Custom expectation description
-    description: ?[]const u8 = null,
+    /// Expected pattern in framebuffer/output
+    pattern: []const u8,
+    /// true = must contain, false = must not contain
+    must_match: bool = true,
 };
 
 /// Failure signal severity
@@ -40,8 +38,8 @@ pub const FailureSeverity = enum {
 pub const FailureSignal = struct {
     /// Pattern in output that indicates failure
     pattern: []const u8,
-    /// Signal severity
-    severity: FailureSeverity = .err,
+    /// Exit on match
+    exit_on_match: bool = true,
 };
 
 /// Declarative command plan schema
@@ -68,10 +66,10 @@ pub const CommandPlan = struct {
     confirm_mode: ConfirmMode = .preview,
 
     /// Expected outcomes
-    expectations: []const Expectation = &.{},
+    expectations: std.ArrayList(Expectation),
 
     /// Failure signal patterns
-    failure_signals: []const FailureSignal = &.{},
+    failure_signals: std.ArrayList(FailureSignal),
 
     /// Plan creation timestamp
     created_at: i64 = 0,
@@ -113,6 +111,70 @@ pub const CommandPlan = struct {
             }
         }
 
+        // Parse expectations array
+        var expectations: std.ArrayList(Expectation) = .{};
+        errdefer {
+            for (expectations.items) |exp| {
+                allocator.free(exp.pattern);
+            }
+            expectations.deinit(allocator);
+        }
+        if (root.get("expectations")) |exp_val| {
+            if (exp_val == .array) {
+                for (exp_val.array.items) |item| {
+                    if (item == .object) {
+                        const exp_obj = item.object;
+                        const pattern = if (exp_obj.get("pattern")) |p| switch (p) {
+                            .string => |s| try allocator.dupe(u8, s),
+                            else => continue,
+                        } else continue;
+
+                        const must_match = if (exp_obj.get("must_match")) |m| switch (m) {
+                            .bool => |b| b,
+                            else => true,
+                        } else true;
+
+                        try expectations.append(allocator, .{
+                            .pattern = pattern,
+                            .must_match = must_match,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Parse failure_signals array
+        var failure_signals: std.ArrayList(FailureSignal) = .{};
+        errdefer {
+            for (failure_signals.items) |sig| {
+                allocator.free(sig.pattern);
+            }
+            failure_signals.deinit(allocator);
+        }
+        if (root.get("failure_signals")) |sig_val| {
+            if (sig_val == .array) {
+                for (sig_val.array.items) |item| {
+                    if (item == .object) {
+                        const sig_obj = item.object;
+                        const pattern = if (sig_obj.get("pattern")) |p| switch (p) {
+                            .string => |s| try allocator.dupe(u8, s),
+                            else => continue,
+                        } else continue;
+
+                        const exit_on_match = if (sig_obj.get("exit_on_match")) |e| switch (e) {
+                            .bool => |b| b,
+                            else => true,
+                        } else true;
+
+                        try failure_signals.append(allocator, .{
+                            .pattern = pattern,
+                            .exit_on_match = exit_on_match,
+                        });
+                    }
+                }
+            }
+        }
+
         return CommandPlan{
             .plan_id = try allocator.dupe(u8, plan_id),
             .command = try allocator.dupe(u8, command),
@@ -133,6 +195,8 @@ pub const CommandPlan = struct {
                 std.meta.stringToEnum(ConfirmMode, c.string) orelse .preview
             else
                 .preview,
+            .expectations = expectations,
+            .failure_signals = failure_signals,
             .created_at = std.time.timestamp(),
         };
     }
@@ -156,6 +220,16 @@ pub const CommandPlan = struct {
         if (self.stdin) |stdin| {
             allocator.free(stdin);
         }
+
+        for (self.expectations.items) |exp| {
+            allocator.free(exp.pattern);
+        }
+        self.expectations.deinit(allocator);
+
+        for (self.failure_signals.items) |sig| {
+            allocator.free(sig.pattern);
+        }
+        self.failure_signals.deinit(allocator);
     }
 
     /// Serialize CommandPlan to JSON string
@@ -375,8 +449,8 @@ pub const CommandPlanner = struct {
         // Compare snapshots against expectations and failure signals
         const comparison_result = try self.compareSnapshot(
             audit.snapshot_after,
-            plan.expectations,
-            plan.failure_signals,
+            plan.expectations.items,
+            plan.failure_signals.items,
         );
 
         // Set outcome based on comparison
@@ -463,40 +537,41 @@ pub const CommandPlanner = struct {
             if (try self.matchPattern(signal.pattern, &snapshot)) {
                 const msg = try std.fmt.allocPrint(
                     self.allocator,
-                    "Failure signal detected: {s} (severity: {s})",
-                    .{ signal.pattern, @tagName(signal.severity) },
+                    "Failure signal detected: {s} (exit_on_match: {})",
+                    .{ signal.pattern, signal.exit_on_match },
                 );
                 return ComparisonResult{
-                    .outcome = if (signal.severity == .critical) .failed else .degraded,
+                    .outcome = if (signal.exit_on_match) .failed else .degraded,
                     .error_message = msg,
                 };
             }
         }
 
         // Then check expectations
-        var all_expectations_met = true;
         for (expectations) |expectation| {
-            // Check pattern if specified
-            if (expectation.pattern) |pattern| {
-                if (!try self.matchPattern(pattern, &snapshot)) {
-                    all_expectations_met = false;
-                    const msg = try std.fmt.allocPrint(
-                        self.allocator,
-                        "Expectation not met: pattern '{s}' not found in output",
-                        .{pattern},
-                    );
-                    std.log.warn("{s}", .{msg});
-                    return ComparisonResult{
-                        .outcome = .degraded,
-                        .error_message = msg,
-                    };
-                }
-            }
-
-            // Note: exit_code checking would require PTY integration
-            // For now, we only validate patterns in framebuffer
-            if (expectation.exit_code) |_| {
-                std.log.debug("Exit code checking not yet implemented (requires PTY)", .{});
+            const matched = try self.matchPattern(expectation.pattern, &snapshot);
+            if (expectation.must_match and !matched) {
+                const msg = try std.fmt.allocPrint(
+                    self.allocator,
+                    "Expectation not met: pattern '{s}' not found in output",
+                    .{expectation.pattern},
+                );
+                std.log.warn("{s}", .{msg});
+                return ComparisonResult{
+                    .outcome = .degraded,
+                    .error_message = msg,
+                };
+            } else if (!expectation.must_match and matched) {
+                const msg = try std.fmt.allocPrint(
+                    self.allocator,
+                    "Expectation not met: pattern '{s}' should not be in output",
+                    .{expectation.pattern},
+                );
+                std.log.warn("{s}", .{msg});
+                return ComparisonResult{
+                    .outcome = .degraded,
+                    .error_message = msg,
+                };
             }
         }
 
@@ -585,6 +660,24 @@ test "command plan - parse from JSON" {
     try testing.expectEqual(ConfirmMode.preview, plan.confirm_mode);
 }
 
+test "fromJson parses expectations and failure_signals" {
+    const json =
+        \\{"plan_id":"test-1","command":"echo","args":["test"],
+        \\"expectations":[{"pattern":"test","must_match":true}],
+        \\"failure_signals":[{"pattern":"error","exit_on_match":true}]}
+    ;
+
+    var plan = try CommandPlan.fromJson(std.testing.allocator, json);
+    defer plan.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), plan.expectations.items.len);
+    try std.testing.expectEqual(@as(usize, 1), plan.failure_signals.items.len);
+    try std.testing.expectEqualStrings("test", plan.expectations.items[0].pattern);
+    try std.testing.expectEqualStrings("error", plan.failure_signals.items[0].pattern);
+    try std.testing.expect(plan.expectations.items[0].must_match);
+    try std.testing.expect(plan.failure_signals.items[0].exit_on_match);
+}
+
 test "command planner - build command string" {
     const testing = std.testing;
 
@@ -605,6 +698,8 @@ test "command planner - build command string" {
         .command = "ls",
         .args = &args,
         .env = env,
+        .expectations = .{},
+        .failure_signals = .{},
     };
 
     const cmd_str = try planner.buildCommandString(&plan);
@@ -634,6 +729,8 @@ test "command planner - execute simple plan" {
         .args = &[_][]const u8{"test"},
         .env = env,
         .confirm_mode = .auto,
+        .expectations = .{},
+        .failure_signals = .{},
     };
 
     const outcome = try planner.executePlan(&plan);
@@ -660,7 +757,9 @@ test "command planner - blocked plan" {
         .command = "rm",
         .args = &[_][]const u8{ "-rf", "/" },
         .env = env,
-        .confirm_mode = .reject, // Explicitly reject
+        .confirm_mode = .reject,
+        .expectations = .{},
+        .failure_signals = .{},
     };
 
     const outcome = try planner.executePlan(&plan);
@@ -686,15 +785,18 @@ test "command planner - snapshot comparison with expectations" {
     defer env.deinit();
 
     // Plan with expectation that should be met
+    var expectations: std.ArrayList(Expectation) = .{};
+    defer expectations.deinit(testing.allocator);
+    try expectations.append(testing.allocator, .{ .pattern = "Hello", .must_match = true });
+
     var plan = CommandPlan{
         .plan_id = "expect-test-1",
         .command = "echo",
         .args = &[_][]const u8{"test"},
         .env = env,
         .confirm_mode = .auto,
-        .expectations = &[_]Expectation{
-            .{ .pattern = "Hello", .description = "Should find Hello in output" },
-        },
+        .expectations = expectations,
+        .failure_signals = .{},
     };
 
     const outcome = try planner.executePlan(&plan);
@@ -719,21 +821,24 @@ test "command planner - snapshot comparison with failure signals" {
     defer env.deinit();
 
     // Plan with failure signal that should be detected
+    var failure_signals: std.ArrayList(FailureSignal) = .{};
+    defer failure_signals.deinit(testing.allocator);
+    try failure_signals.append(testing.allocator, .{ .pattern = "ERROR", .exit_on_match = true });
+
     var plan = CommandPlan{
         .plan_id = "failure-test-1",
         .command = "test",
         .args = &[_][]const u8{},
         .env = env,
         .confirm_mode = .auto,
-        .failure_signals = &[_]FailureSignal{
-            .{ .pattern = "ERROR", .severity = .err },
-        },
+        .expectations = .{},
+        .failure_signals = failure_signals,
     };
 
     const outcome = try planner.executePlan(&plan);
 
-    // Should fail because "ERROR" is detected in the framebuffer
-    try testing.expectEqual(PlanOutcome.degraded, outcome);
+    // Should fail because "ERROR" is detected in the framebuffer (exit_on_match=true -> failed)
+    try testing.expectEqual(PlanOutcome.failed, outcome);
 
     // Check that error message was recorded
     const audit = planner.audits.items[0];
@@ -756,15 +861,18 @@ test "command planner - unmet expectations" {
     defer env.deinit();
 
     // Plan with expectation that won't be met
+    var expectations: std.ArrayList(Expectation) = .{};
+    defer expectations.deinit(testing.allocator);
+    try expectations.append(testing.allocator, .{ .pattern = "Expected output", .must_match = true });
+
     var plan = CommandPlan{
         .plan_id = "unmet-test-1",
         .command = "test",
         .args = &[_][]const u8{},
         .env = env,
         .confirm_mode = .auto,
-        .expectations = &[_]Expectation{
-            .{ .pattern = "Expected output", .description = "Should find expected output" },
-        },
+        .expectations = expectations,
+        .failure_signals = .{},
     };
 
     const outcome = try planner.executePlan(&plan);

@@ -510,16 +510,35 @@ pub const TerminalRuntime = struct {
                     // Collect CSI parameters until we hit the terminator
                     if (byte >= 0x40 and byte <= 0x7e) {
                         // Terminator byte (@ through ~)
-                        if (byte == 'm') {
-                            // SGR sequence - process styling
-                            const params_slice = if (param_buffer.items.len > 0)
-                                param_buffer.items
-                            else
-                                "0"; // Default to reset
+                        const params_slice = if (param_buffer.items.len > 0)
+                            param_buffer.items
+                        else
+                            "";
 
-                            try self.processSgrSequence(params_slice);
+                        switch (byte) {
+                            'm' => {
+                                // SGR sequence - process styling
+                                const sgr_params = if (params_slice.len > 0) params_slice else "0";
+                                try self.processSgrSequence(sgr_params);
+                            },
+                            'H', 'f' => {
+                                // CUP (Cursor Position) - CSI row;col H
+                                self.processCursorPosition(params_slice);
+                            },
+                            'J' => {
+                                // ED (Erase in Display)
+                                self.processEraseDisplay(params_slice);
+                            },
+                            'K' => {
+                                // EL (Erase in Line)
+                                self.processEraseLine(params_slice);
+                            },
+                            'G' => {
+                                // CHA (Cursor Horizontal Absolute)
+                                self.processCursorColumn(params_slice);
+                            },
+                            else => {},
                         }
-                        // Other CSI sequences (cursor movement, etc.) ignored for now
                         state = .normal;
                     } else if (byte >= 0x30 and byte <= 0x3f) {
                         // Parameter bytes (0-9, :, ;, <, =, >, ?)
@@ -616,6 +635,127 @@ pub const TerminalRuntime = struct {
                 try self.scrollUp();
                 self.cursor_row = self.rows - 1;
             }
+        }
+    }
+
+    /// Process CSI H (CUP - Cursor Position)
+    fn processCursorPosition(self: *TerminalRuntime, params: []const u8) void {
+        var row: usize = 1;
+        var col: usize = 1;
+
+        if (params.len > 0) {
+            var iter = std.mem.splitScalar(u8, params, ';');
+            if (iter.next()) |row_str| {
+                if (row_str.len > 0) {
+                    row = std.fmt.parseInt(usize, row_str, 10) catch 1;
+                }
+            }
+            if (iter.next()) |col_str| {
+                if (col_str.len > 0) {
+                    col = std.fmt.parseInt(usize, col_str, 10) catch 1;
+                }
+            }
+        }
+
+        // Convert to 0-indexed and clamp
+        self.cursor_row = if (row > 0) @min(row - 1, self.rows - 1) else 0;
+        self.cursor_col = if (col > 0) @min(col - 1, self.cols - 1) else 0;
+    }
+
+    /// Process CSI G (CHA - Cursor Horizontal Absolute)
+    fn processCursorColumn(self: *TerminalRuntime, params: []const u8) void {
+        var col: usize = 1;
+
+        if (params.len > 0) {
+            col = std.fmt.parseInt(usize, params, 10) catch 1;
+        }
+
+        // Convert to 0-indexed and clamp
+        self.cursor_col = if (col > 0) @min(col - 1, self.cols - 1) else 0;
+    }
+
+    /// Process CSI J (ED - Erase in Display)
+    fn processEraseDisplay(self: *TerminalRuntime, params: []const u8) void {
+        const mode: u8 = if (params.len > 0)
+            std.fmt.parseInt(u8, params, 10) catch 0
+        else
+            0;
+
+        switch (mode) {
+            0 => self.clearFromCursorToEndOfScreen(),
+            1 => self.clearFromStartOfScreenToCursor(),
+            2, 3 => self.clearEntireScreen(),
+            else => {},
+        }
+    }
+
+    /// Process CSI K (EL - Erase in Line)
+    fn processEraseLine(self: *TerminalRuntime, params: []const u8) void {
+        const mode: u8 = if (params.len > 0)
+            std.fmt.parseInt(u8, params, 10) catch 0
+        else
+            0;
+
+        switch (mode) {
+            0 => self.clearFromCursorToEndOfLine(),
+            1 => self.clearFromStartOfLineToCursor(),
+            2 => self.clearLine(self.cursor_row),
+            else => {},
+        }
+    }
+
+    /// Clear from cursor to end of screen
+    fn clearFromCursorToEndOfScreen(self: *TerminalRuntime) void {
+        self.clearFromCursorToEndOfLine();
+        var row = self.cursor_row + 1;
+        while (row < self.rows) : (row += 1) {
+            self.clearLine(row);
+        }
+    }
+
+    /// Clear from start of screen to cursor
+    fn clearFromStartOfScreenToCursor(self: *TerminalRuntime) void {
+        var row: usize = 0;
+        while (row < self.cursor_row) : (row += 1) {
+            self.clearLine(row);
+        }
+        self.clearFromStartOfLineToCursor();
+    }
+
+    /// Clear entire screen
+    fn clearEntireScreen(self: *TerminalRuntime) void {
+        var row: usize = 0;
+        while (row < self.rows) : (row += 1) {
+            self.clearLine(row);
+        }
+    }
+
+    /// Clear a specific line
+    fn clearLine(self: *TerminalRuntime, row: usize) void {
+        if (row >= self.framebuffer.items.len) return;
+        const row_cells = &self.framebuffer.items[row];
+        for (row_cells.items) |*cell| {
+            cell.* = Cell{};
+        }
+    }
+
+    /// Clear from cursor to end of current line
+    fn clearFromCursorToEndOfLine(self: *TerminalRuntime) void {
+        if (self.cursor_row >= self.framebuffer.items.len) return;
+        const row = &self.framebuffer.items[self.cursor_row];
+        var col = self.cursor_col;
+        while (col < row.items.len) : (col += 1) {
+            row.items[col] = Cell{};
+        }
+    }
+
+    /// Clear from start of line to cursor
+    fn clearFromStartOfLineToCursor(self: *TerminalRuntime) void {
+        if (self.cursor_row >= self.framebuffer.items.len) return;
+        const row = &self.framebuffer.items[self.cursor_row];
+        var col: usize = 0;
+        while (col <= self.cursor_col and col < row.items.len) : (col += 1) {
+            row.items[col] = Cell{};
         }
     }
 
@@ -1716,4 +1856,79 @@ test "formatSnapshotForPrompt - max lines limit" {
         }
     }
     try testing.expect(line_count <= 10);
+}
+
+test "CSI H cursor position" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer runtime.shutdown();
+
+    try runtime.feedBytes("\x1b[5;10H"); // Move to row 5, col 10
+    try testing.expectEqual(@as(u16, 4), runtime.cursor_row);
+    try testing.expectEqual(@as(u16, 9), runtime.cursor_col);
+
+    try runtime.feedBytes("\x1b[H"); // Move to home (1,1)
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_row);
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_col);
+
+    // Test with only row specified
+    try runtime.feedBytes("\x1b[3H");
+    try testing.expectEqual(@as(u16, 2), runtime.cursor_row);
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_col);
+
+    // Test clamping to bounds
+    try runtime.feedBytes("\x1b[100;100H");
+    try testing.expectEqual(@as(u16, 23), runtime.cursor_row);
+    try testing.expectEqual(@as(u16, 79), runtime.cursor_col);
+}
+
+test "CSI J erase display" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 10, .rows = 3 });
+    defer runtime.shutdown();
+
+    try runtime.feedBytes("Line1\nLine2\nLine3");
+    try runtime.feedBytes("\x1b[2J"); // Clear screen
+
+    // First cell should be empty (space with default char)
+    try testing.expectEqual(@as(u8, ' '), runtime.framebuffer.items[0].items[0].char);
+}
+
+test "CSI K erase line" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 20, .rows = 3 });
+    defer runtime.shutdown();
+
+    try runtime.feedBytes("HelloWorld");
+    // Cursor is now at col 10. Move to col 6 (1-indexed = index 5)
+    try runtime.feedBytes("\x1b[6G");
+    try testing.expectEqual(@as(u16, 5), runtime.cursor_col);
+    try runtime.feedBytes("\x1b[K"); // Erase from cursor to end
+
+    // First 5 chars should remain (cols 0-4: "Hello")
+    try testing.expectEqual(@as(u8, 'H'), runtime.framebuffer.items[0].items[0].char);
+    try testing.expectEqual(@as(u8, 'e'), runtime.framebuffer.items[0].items[1].char);
+    try testing.expectEqual(@as(u8, 'l'), runtime.framebuffer.items[0].items[2].char);
+    try testing.expectEqual(@as(u8, 'l'), runtime.framebuffer.items[0].items[3].char);
+    try testing.expectEqual(@as(u8, 'o'), runtime.framebuffer.items[0].items[4].char);
+    // Col 5 onwards should be cleared
+    try testing.expectEqual(@as(u8, ' '), runtime.framebuffer.items[0].items[5].char);
+    try testing.expectEqual(@as(u8, ' '), runtime.framebuffer.items[0].items[6].char);
+}
+
+test "CSI G cursor horizontal absolute" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer runtime.shutdown();
+
+    try runtime.feedBytes("Hello");
+    try runtime.feedBytes("\x1b[1G"); // Move to col 1 (first column)
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_col);
+
+    try runtime.feedBytes("\x1b[10G"); // Move to col 10
+    try testing.expectEqual(@as(u16, 9), runtime.cursor_col);
 }

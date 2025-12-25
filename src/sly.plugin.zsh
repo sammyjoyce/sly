@@ -6,6 +6,25 @@
 #   SLY_SPINNER  - Enable/disable spinner animation (default: 1)
 #   SLY_COLOR    - Enable/disable color output (default: 1)
 
+# Portable timeout function (supports Linux timeout, macOS gtimeout, or fallback)
+_sly_run_with_timeout() {
+  local timeout_secs="$1"
+  shift
+  
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$timeout_secs" "$@"
+  else
+    # No timeout available, run directly (warn once)
+    if [[ -z "$_SLY_TIMEOUT_WARNED" ]]; then
+      print -P "%F{yellow}⚠ sly: timeout command not found, running without timeout%f" >&2
+      _SLY_TIMEOUT_WARNED=1
+    fi
+    "$@"
+  fi
+}
+
 _sly_exec() {
   local query="$1"
   
@@ -39,18 +58,12 @@ _sly_exec() {
   fi
   
   setopt local_options no_monitor no_notify
-  local timeout_cmd=""
   local timeout_val="${SLY_TIMEOUT:-30}"
   
-  # Use timeout wrapper if available
-  if command -v timeout >/dev/null 2>&1; then
-    timeout_cmd="timeout $timeout_val"
-  fi
-  
   if [[ -n "$context" ]]; then
-    ( $timeout_cmd sly plan --query "$query" --context "$context" >"$tmp" 2>/dev/null ) &
+    ( _sly_run_with_timeout "$timeout_val" sly plan --query "$query" --context "$context" >"$tmp" 2>/dev/null ) &
   else
-    ( $timeout_cmd sly plan --query "$query" >"$tmp" 2>/dev/null ) &
+    ( _sly_run_with_timeout "$timeout_val" sly plan --query "$query" >"$tmp" 2>/dev/null ) &
   fi
   local pid=$!
 

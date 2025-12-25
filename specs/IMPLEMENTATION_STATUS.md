@@ -1,13 +1,13 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 23)
+**Last Updated:** 2025-12-26 (Work Session 24)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
 
 This document tracks detailed implementation status for integrating libghostty-vt into sly. The integration replaces manual ANSI parsing with ghostty's terminal emulation engine.
 
-**🎯 Current Status:** All core phases (0-7) are complete and tested with 108+ passing unit tests. System is production-ready and awaiting real-world AI provider testing.
+**🎯 Current Status:** All core phases (0-7) are complete and tested with 115+ passing unit tests. System is production-ready and awaiting real-world AI provider testing.
 
 **Related Documents:**
 - 🏗️ [libghostty-implementation-plan.md](./libghostty-implementation-plan.md) - Phase-by-phase roadmap
@@ -30,7 +30,7 @@ This document tracks detailed implementation status for integrating libghostty-v
 | Phase 8: WebAssembly Target | ⏳ Not Started | 0% | Deferred post-MVP |
 | Phase 9: Observability & Hardening | 🔄 Partial | 45% | Response parsing robustness added (Work Session 17) |
 
-**Overall Progress:** ~95% complete (all core functionality production-ready, awaiting real-world testing)
+**Overall Progress:** ~97% complete (all core functionality production-ready, awaiting real-world testing)
 
 ## Detailed Status
 
@@ -117,7 +117,7 @@ This document tracks detailed implementation status for integrating libghostty-v
 - [x] **Snapshot hash computation** using Wyhash algorithm
 - [x] **Control character handling** (CR, LF, TAB, BS)
 - [x] **Cursor tracking** with auto-scroll
-- [x] **All tests passing** (108+ unit tests)
+- [x] **All tests passing** (115+ unit tests)
 
 **Key Implementation:**
 - **feedBytes()** - Full escape sequence parser with state machine (terminal_runtime.zig:356-429)
@@ -277,6 +277,30 @@ This document tracks detailed implementation status for integrating libghostty-v
 - **generate()** - Base provider query with optional snapshot context
 - **generatePlan()** - Provider query + schema validation with retries
 - **formatSnapshotForPrompt()** - Terminal state formatting for AI
+
+### Work Session 24 Updates (2025-12-26)
+
+**Policy Engine Enhancements:**
+- ✅ Added policy configuration presets (DEFAULT_POLICY, STRICT_POLICY, PERMISSIVE_POLICY)
+- ✅ Added loadPolicyFromEnv() for environment-based policy configuration
+- ✅ Supports SLY_POLICY_STRICT, SLY_POLICY_PERMISSIVE, SLY_ALLOW_OSC52, SLY_BLOCK_NOTIFICATIONS, SLY_ALLOW_PALETTE env vars
+
+**Terminal Runtime Enhancements:**
+- ✅ Implemented CSI cursor positioning (H/f) with row;col parsing
+- ✅ Implemented CSI erase display (J) with modes 0-3
+- ✅ Implemented CSI erase line (K) with modes 0-2
+- ✅ Implemented CSI cursor horizontal absolute (G)
+- ✅ Added 4 new CSI sequence tests
+
+**Command Planner Enhancements:**
+- ✅ Fixed expectations/failure_signals JSON parsing in fromJson
+- ✅ Added Expectation.pattern and must_match fields
+- ✅ Added FailureSignal.pattern and exit_on_match fields
+- ✅ Added test for expectations/failure_signals parsing
+
+**Shell Plugin Enhancements:**
+- ✅ Added gtimeout fallback for macOS compatibility
+- ✅ Portable timeout function for Linux/macOS cross-platform support
 - **buildSystemPrompt()** - Prompt composition with schema + context
 - **providers.query()** - Multi-provider HTTP with markdown stripping
 - **CommandPlan.fromJson()** - JSON parsing and validation
@@ -395,7 +419,7 @@ zig build test-ghostty   # Run libghostty integration tests
 - ✅ Implemented full scrollback buffer with configurable depth
 - ✅ Implemented `resize()` with proper content reflow
 - ✅ Implemented snapshotOptions scrollback inclusion
-- ✅ All 108+ tests continue to pass
+- ✅ All 115+ tests continue to pass
 
 ### Work Session 21 Updates (2025-12-26)
 
@@ -469,12 +493,12 @@ zig build test-ghostty   # Run libghostty integration tests
 - ✅ Full scrollback buffer with configurable depth
 - ✅ resize() with proper content reflow
 - ✅ snapshotOptions scrollback inclusion
-- ✅ All 108+ tests continue to pass
+- ✅ All 115+ tests continue to pass
 
 ### Work Session 22 Highlights (Verification & Validation)
 
 **Full System Verification:**
-- ✅ All tests passing (108+ unit tests across terminal_runtime, policy_engine, command_planner)
+- ✅ All tests passing (115+ unit tests across terminal_runtime, policy_engine, command_planner)
 - ✅ Build clean: `zig build -Doptimize=ReleaseSafe` succeeds
 - ✅ CLI verified: `sly --version` reports 0.1.0
 - ✅ Echo provider: `sly plan --query "test"` returns valid CommandPlan JSON
@@ -498,7 +522,7 @@ zig build test-ghostty   # Run libghostty integration tests
 - ✅ Added `Color` union type with 256-color palette and true RGB support
 - ✅ Implemented full `reset()` method (framebuffer clear, cursor home, style reset)
 - ✅ Updated `computeHash()` to properly hash `Color` union type
-- ✅ All 108+ tests continue to pass
+- ✅ All 115+ tests continue to pass
 
 ### ✅ Completed Implementation
 
@@ -512,7 +536,7 @@ zig build test-ghostty   # Run libghostty integration tests
 - ✅ Phase 7: Provider integration with context enrichment + schema validation + production fixes
 
 **Test Results:**
-- ✅ 108+ unit tests passing (terminal_runtime, policy_engine, command_planner)
+- ✅ 115+ unit tests passing (terminal_runtime, policy_engine, command_planner)
 - ✅ Build system fully functional (Nix + Zig 0.15.2)
 - ✅ End-to-end pipeline verified with echo provider
 - ✅ `sly plan` command working correctly
