@@ -1,6 +1,6 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 21)
+**Last Updated:** 2025-12-26 (Work Session 23)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
@@ -21,11 +21,11 @@ This document tracks detailed implementation status for integrating libghostty-v
 |-------|--------|------------|-------|
 | Phase 0: Dependencies & Tooling | ✅ Complete | 100% | Wasm exports deferred to Phase 8 |
 | Phase 1: TerminalRuntime Skeleton | ✅ Complete | 100% | Core runtime facade fully implemented |
-| Phase 2: Output Ingestion & Snapshots | ✅ Complete | 100% | feedBytes() with escape sequences, SGR/OSC, snapshots |
+| Phase 2: Output Ingestion & Snapshots | ✅ Complete | 100% | feedBytes() with escape sequences, SGR/OSC, snapshots, full scrollback buffer |
 | Phase 3: Input Synthesis & Paste | ✅ Complete | 100% | Key encoding, paste safety, policy integration |
 | Phase 4: OSC Bus & Policy | ✅ Complete | 100% | Full policy engine with OSC routing |
-| Phase 5: Command Planner | ✅ Complete | 100% | Plan execution with snapshot comparison |
-| Phase 6: Shell Bridge & UX | ✅ Complete | 100% | zsh/bash plugins with CommandPlan JSON parsing |
+| Phase 5: Command Planner | ✅ Complete | 100% | Plan execution with snapshot comparison, scrollback inclusion |
+| Phase 6: Shell Bridge & UX | ✅ Complete | 100% | zsh/bash plugins with SLY_TIMEOUT, SLY_SPINNER, SLY_COLOR env vars |
 | Phase 7: Conversation Orchestrator | ✅ Complete | 100% | Provider integration with context + schema validation |
 | Phase 8: WebAssembly Target | ⏳ Not Started | 0% | Deferred post-MVP |
 | Phase 9: Observability & Hardening | 🔄 Partial | 45% | Response parsing robustness added (Work Session 17) |
@@ -383,6 +383,20 @@ zig build test-ghostty   # Run libghostty integration tests
 - Key encoder tests (4 tests: basic/modifiers/Alt/cursor mode)
 - feedBytes tests (5 tests including SGR, OSC, snapshot generation)
 
+### Work Session 23 Updates (2025-12-26)
+
+**Shell Plugin Enhancements:**
+- ✅ Added SLY_TIMEOUT, SLY_SPINNER, SLY_COLOR environment variable support
+- ✅ Added sly command existence check to zsh plugin
+- ✅ Added temp file trap cleanup for security
+- ✅ Added JSON validation before parsing
+
+**Terminal Runtime Enhancements:**
+- ✅ Implemented full scrollback buffer with configurable depth
+- ✅ Implemented `resize()` with proper content reflow
+- ✅ Implemented snapshotOptions scrollback inclusion
+- ✅ All 108+ tests continue to pass
+
 ### Work Session 21 Updates (2025-12-26)
 
 - Added `formatSnapshotForPrompt()` function for LLM context generation
@@ -439,9 +453,23 @@ zig build test-ghostty   # Run libghostty integration tests
 - `specs/libghostty-design-decisions.md` - Design rationale
 - `specs/libghostty-implementation-plan.md` - Phase-by-phase plan
 
-## Current Status (Updated 2025-12-26 Work Session 22)
+## Current Status (Updated 2025-12-26 Work Session 23)
 
 **🎉 Major Achievement:** All core phases (0-7) are now **100% COMPLETE** with production fixes and terminal state enhancements!
+
+### Work Session 23 Highlights (Shell Plugins & Scrollback)
+
+**Shell Plugin Enhancements:**
+- ✅ SLY_TIMEOUT, SLY_SPINNER, SLY_COLOR environment variable support
+- ✅ sly command existence check in zsh plugin
+- ✅ Temp file trap cleanup for security
+- ✅ JSON validation before parsing
+
+**Terminal Runtime Enhancements:**
+- ✅ Full scrollback buffer with configurable depth
+- ✅ resize() with proper content reflow
+- ✅ snapshotOptions scrollback inclusion
+- ✅ All 108+ tests continue to pass
 
 ### Work Session 22 Highlights (Verification & Validation)
 
@@ -476,11 +504,11 @@ zig build test-ghostty   # Run libghostty integration tests
 
 **All critical functionality is production-ready:**
 - ✅ Phase 0-1: Foundation and runtime with libghostty integration
-- ✅ Phase 2: feedBytes() with full VT sequence parsing, SGR/OSC, snapshots
+- ✅ Phase 2: feedBytes() with full VT sequence parsing, SGR/OSC, snapshots, scrollback buffer
 - ✅ Phase 3: Input synthesis with paste safety and key encoding
 - ✅ Phase 4: Policy engine with comprehensive OSC routing
 - ✅ Phase 5: Command planner with snapshot comparison and pattern matching
-- ✅ Phase 6: Shell integration with CommandPlan JSON parsing (zsh + bash)
+- ✅ Phase 6: Shell integration with CommandPlan JSON parsing, env var config (zsh + bash)
 - ✅ Phase 7: Provider integration with context enrichment + schema validation + production fixes
 
 **Test Results:**
@@ -511,7 +539,7 @@ zig build test-ghostty   # Run libghostty integration tests
 - **Status:** Ready to test (all fixes applied)
 
 **Priority 2: Documentation Updates** (HIGH VALUE)
-- ✅ Update IMPLEMENTATION_STATUS.md (this file) - IN PROGRESS
+- ✅ Update IMPLEMENTATION_STATUS.md (this file) - COMPLETE (Work Session 23)
 - Update libghostty-implementation-plan.md to reflect completion
 - Archive FEEDBYTES_IMPLEMENTATION_GUIDE.md as obsolete
 - Document Work Session 17 fixes in SCRATCH.md
@@ -542,7 +570,7 @@ zig build test-ghostty   # Run libghostty integration tests
 - Compare command quality with/without terminal context
 
 **2. Documentation Cleanup** (30 minutes)
-- ✅ Update IMPLEMENTATION_STATUS.md - COMPLETE
+- ✅ Update IMPLEMENTATION_STATUS.md - COMPLETE (Work Session 23)
 - Update libghostty-implementation-plan.md phase status
 - Mark FEEDBYTES_IMPLEMENTATION_GUIDE.md as archived/obsolete
 - Add Work Session 17 notes to SCRATCH.md

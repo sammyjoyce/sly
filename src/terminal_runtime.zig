@@ -137,6 +137,9 @@ pub const TerminalRuntime = struct {
     /// Framebuffer: 2D grid of cells (rows x cols)
     framebuffer: std.ArrayList(std.ArrayList(Cell)),
 
+    /// Scrollback buffer: lines that have scrolled off the top
+    scrollback: std.ArrayList(std.ArrayList(Cell)),
+
     /// Current cursor position
     cursor_row: u16 = 0,
     cursor_col: u16 = 0,
@@ -159,8 +162,10 @@ pub const TerminalRuntime = struct {
             .policy_engine = policy.PolicyEngine.init(allocator, params.policy_config),
             .osc_events = .{},
             .framebuffer = .{},
+            .scrollback = .{},
         };
         errdefer runtime.osc_events.deinit(allocator);
+        errdefer runtime.scrollback.deinit(allocator);
 
         // Initialize framebuffer with empty rows
         errdefer runtime.framebuffer.deinit(allocator);
@@ -255,6 +260,12 @@ pub const TerminalRuntime = struct {
         }
         self.framebuffer.deinit(self.allocator);
 
+        // Clean up scrollback
+        for (self.scrollback.items) |*row| {
+            row.deinit(self.allocator);
+        }
+        self.scrollback.deinit(self.allocator);
+
         // Clean up OSC events
         for (self.osc_events.items) |*event| {
             event.deinit(self.allocator);
@@ -290,15 +301,78 @@ pub const TerminalRuntime = struct {
         std.log.info("Terminal runtime reset", .{});
     }
 
-    /// Resize the terminal viewport
+    /// Resize the terminal viewport with content reflow
     pub fn resize(self: *TerminalRuntime, cols: u16, rows: u16) !void {
+        const old_cols = self.cols;
+        const old_rows = self.rows;
+
+        // Handle column resize - adjust each row
+        if (cols != old_cols) {
+            // Resize existing framebuffer rows
+            for (self.framebuffer.items) |*row| {
+                if (cols > old_cols) {
+                    // Expand: add empty cells
+                    try row.ensureTotalCapacity(self.allocator, cols);
+                    const to_add = cols - @as(u16, @intCast(row.items.len));
+                    row.appendNTimesAssumeCapacity(Cell{}, to_add);
+                } else {
+                    // Shrink: truncate (content reflow would be more sophisticated)
+                    row.shrinkRetainingCapacity(cols);
+                }
+            }
+
+            // Resize scrollback rows
+            for (self.scrollback.items) |*row| {
+                if (cols > old_cols) {
+                    try row.ensureTotalCapacity(self.allocator, cols);
+                    const to_add = cols - @as(u16, @intCast(row.items.len));
+                    row.appendNTimesAssumeCapacity(Cell{}, to_add);
+                } else {
+                    row.shrinkRetainingCapacity(cols);
+                }
+            }
+        }
+
+        // Handle row resize
+        if (rows != old_rows) {
+            if (rows > old_rows) {
+                // Expand: add empty rows at bottom
+                for (0..(rows - old_rows)) |_| {
+                    var new_row = try std.ArrayList(Cell).initCapacity(self.allocator, cols);
+                    new_row.appendNTimesAssumeCapacity(Cell{}, cols);
+                    try self.framebuffer.append(self.allocator, new_row);
+                }
+            } else {
+                // Shrink: move excess rows to scrollback
+                while (self.framebuffer.items.len > rows) {
+                    var removed_row = self.framebuffer.orderedRemove(0);
+
+                    // Add to scrollback if within depth limit
+                    if (self.scrollback.items.len < self.params.scrollback_depth) {
+                        try self.scrollback.append(self.allocator, removed_row);
+                    } else if (self.params.scrollback_depth > 0) {
+                        var oldest = self.scrollback.orderedRemove(0);
+                        oldest.deinit(self.allocator);
+                        try self.scrollback.append(self.allocator, removed_row);
+                    } else {
+                        removed_row.deinit(self.allocator);
+                    }
+                }
+            }
+        }
+
         self.cols = cols;
         self.rows = rows;
 
-        // TODO: Trigger libghostty reflow
-        // TODO: Emit delta snapshots for providers
+        // Clamp cursor position to new bounds
+        if (self.cursor_col >= cols) {
+            self.cursor_col = if (cols > 0) cols - 1 else 0;
+        }
+        if (self.cursor_row >= rows) {
+            self.cursor_row = if (rows > 0) rows - 1 else 0;
+        }
 
-        std.log.info("Terminal resized to {any}x{any}", .{ cols, rows });
+        std.log.info("Terminal resized from {any}x{any} to {any}x{any}", .{ old_cols, old_rows, cols, rows });
     }
 
     /// Key encoder configuration options
@@ -545,12 +619,23 @@ pub const TerminalRuntime = struct {
         }
     }
 
-    /// Scroll the framebuffer up by one line
+    /// Scroll the framebuffer up by one line, moving top row to scrollback
     fn scrollUp(self: *TerminalRuntime) !void {
-        // Remove first row (it would go into scrollback, but we don't implement that yet)
         if (self.framebuffer.items.len > 0) {
             var first_row = self.framebuffer.orderedRemove(0);
-            first_row.deinit(self.allocator);
+
+            // Add to scrollback if within depth limit
+            if (self.scrollback.items.len < self.params.scrollback_depth) {
+                try self.scrollback.append(self.allocator, first_row);
+            } else if (self.params.scrollback_depth > 0) {
+                // Scrollback is full - remove oldest line and add new one
+                var oldest = self.scrollback.orderedRemove(0);
+                oldest.deinit(self.allocator);
+                try self.scrollback.append(self.allocator, first_row);
+            } else {
+                // No scrollback configured - just discard the row
+                first_row.deinit(self.allocator);
+            }
 
             // Add new empty row at bottom
             var new_row = std.ArrayList(Cell).initCapacity(self.allocator, self.cols) catch |err| {
@@ -851,8 +936,6 @@ pub const TerminalRuntime = struct {
 
     /// Create an immutable snapshot of current terminal state
     pub fn snapshot(self: *TerminalRuntime, options: SnapshotOptions) !Snapshot {
-        _ = options; // TODO: Use for scrollback inclusion
-
         // Copy framebuffer
         var fb_copy = try self.allocator.alloc([]Cell, self.framebuffer.items.len);
         errdefer {
@@ -864,6 +947,27 @@ pub const TerminalRuntime = struct {
 
         for (self.framebuffer.items, 0..) |row, i| {
             fb_copy[i] = try self.allocator.dupe(Cell, row.items);
+        }
+
+        // Copy scrollback (if requested)
+        var sb_copy: [][]Cell = &[_][]Cell{};
+        if (options.include_scrollback and self.scrollback.items.len > 0) {
+            // Copy last N lines of scrollback (most recent)
+            const sb_len = self.scrollback.items.len;
+            const lines_to_copy = @min(sb_len, options.scrollback_lines);
+            const start_idx = sb_len - lines_to_copy;
+
+            sb_copy = try self.allocator.alloc([]Cell, lines_to_copy);
+            errdefer {
+                for (sb_copy, 0..) |row, i| {
+                    if (i < sb_copy.len) self.allocator.free(row);
+                }
+                self.allocator.free(sb_copy);
+            }
+
+            for (self.scrollback.items[start_idx..], 0..) |row, i| {
+                sb_copy[i] = try self.allocator.dupe(Cell, row.items);
+            }
         }
 
         // Copy OSC events
@@ -879,6 +983,7 @@ pub const TerminalRuntime = struct {
             .rows = self.rows,
             .cols = self.cols,
             .framebuffer = fb_copy,
+            .scrollback = sb_copy,
             .cursor_row = self.cursor_row,
             .cursor_col = self.cursor_col,
             .cursor_visible = self.cursor_visible,
@@ -973,6 +1078,9 @@ pub const Snapshot = struct {
     /// Viewport content (current visible screen)
     framebuffer: []const []const Cell,
 
+    /// Scrollback content (lines that have scrolled off top, oldest first)
+    scrollback: []const []const Cell,
+
     /// Cursor position
     cursor_row: u16,
     cursor_col: u16,
@@ -991,6 +1099,10 @@ pub const Snapshot = struct {
             allocator.free(row);
         }
         allocator.free(self.framebuffer);
+        for (self.scrollback) |row| {
+            allocator.free(row);
+        }
+        allocator.free(self.scrollback);
         allocator.free(self.osc_events);
     }
 };
