@@ -5,10 +5,11 @@
 # Then:   press Ctrl-x a   -> buffer is replaced with the command
 #
 # Environment variables:
-#   SLY_TIMEOUT     - Generation timeout in seconds (default: 30)
-#   SLY_SPINNER     - Enable/disable spinner animation (default: 1)
-#   SLY_COLOR       - Enable/disable color output (default: 1)
-#   SLY_BASH_ENTER  - Enable Enter key override (default: 0)
+#   SLY_TIMEOUT         - Generation timeout in seconds (default: 30)
+#   SLY_SPINNER         - Enable/disable spinner animation (default: 1)
+#   SLY_SPINNER_BRAILLE - Use braille spinner characters (default: 0)
+#   SLY_COLOR           - Enable/disable color output (default: 1)
+#   SLY_BASH_ENTER      - Enable Enter key override (default: 0)
 
 # Portable timeout function (supports Linux timeout, macOS gtimeout, or fallback)
 __sly_run_with_timeout() {
@@ -65,10 +66,18 @@ __sly_expand() {
     fi
     
     # Call sly plan with context if available, with optional spinner
-    local rc=0
     local tmp
     tmp="$(mktemp -t sly.XXXXXX)"
-    trap "rm -f '$tmp'" RETURN
+    
+    # Cleanup function for temp file
+    __sly_cleanup() {
+      rm -f "$tmp"
+    }
+    trap __sly_cleanup RETURN
+    
+    # Handle Ctrl+C during generation
+    local interrupted=0
+    trap 'interrupted=1; kill "$pid" 2>/dev/null' INT
     
     if [[ -n "$context" ]]; then
       __sly_run_with_timeout "$timeout_val" sly plan --query "$q" --context "$context" >"$tmp" 2>/dev/null &
@@ -79,22 +88,51 @@ __sly_expand() {
     
     # Spinner animation (can be disabled with SLY_SPINNER=0)
     if [[ "${SLY_SPINNER:-1}" -eq 1 ]]; then
-      local spinner_chars='/-\|'
+      local spinner_chars spinner_len
+      if [[ "${SLY_SPINNER_BRAILLE:-0}" -eq 1 ]]; then
+        spinner_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+        spinner_len=10
+      else
+        spinner_chars='/-\|'
+        spinner_len=4
+      fi
       local i=0
       while kill -0 "$pid" 2>/dev/null; do
-        printf '\rGenerating... %s' "${spinner_chars:i%4:1}"
-        ((i++))
+        if [[ "${SLY_SPINNER_BRAILLE:-0}" -eq 1 ]]; then
+          # Braille characters are 3 bytes each in UTF-8
+          printf '\rGenerating... %s' "${spinner_chars:i*3:3}"
+        else
+          printf '\rGenerating... %s' "${spinner_chars:i:1}"
+        fi
+        ((i = (i + 1) % spinner_len))
         sleep 0.1
       done
       printf '\r%s\r' "                " # Clear the spinner line
     fi
     
-    wait "$pid"; rc=$?
+    wait "$pid"
+    local wait_rc=$?
     plan_json="$(cat "$tmp")"
     rm -f "$tmp"
     
+    # Restore default INT handler
+    trap - INT
+    
+    # Handle interrupt
+    if [[ $interrupted -eq 1 ]]; then
+      printf '\n'
+      if [[ "${SLY_COLOR:-1}" -eq 1 ]]; then
+        printf '\e[33m%s\e[0m\n' "Generation cancelled"
+      else
+        printf '%s\n' "Generation cancelled"
+      fi
+      READLINE_LINE=""
+      READLINE_POINT=0
+      return 0
+    fi
+    
     # Check for timeout (exit code 124)
-    if [[ $rc -eq 124 ]]; then
+    if [[ $wait_rc -eq 124 ]]; then
       if [[ "${SLY_COLOR:-1}" -eq 1 ]]; then
         printf '\e[31m%s\e[0m\n' "Generation timed out after ${timeout_val}s"
       else

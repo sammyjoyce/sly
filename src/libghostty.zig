@@ -140,6 +140,40 @@ pub const paste_is_safe = c.ghostty_paste_is_safe;
 pub const Color = c.GhosttyColor;
 pub const ColorRGB = c.GhosttyColorRGB;
 
+// Key codes (USB HID scancodes)
+// Common keys
+pub const KEY_RETURN: u32 = 0x28;
+pub const KEY_ESCAPE: u32 = 0x29;
+pub const KEY_BACKSPACE: u32 = 0x2A;
+pub const KEY_TAB: u32 = 0x2B;
+pub const KEY_DELETE: u32 = 0x4C;
+
+// Navigation keys
+pub const KEY_HOME: u32 = 0x4A;
+pub const KEY_PAGE_UP: u32 = 0x4B;
+pub const KEY_END: u32 = 0x4D;
+pub const KEY_PAGE_DOWN: u32 = 0x4E;
+
+// Arrow keys
+pub const KEY_RIGHT: u32 = 0x4F;
+pub const KEY_LEFT: u32 = 0x50;
+pub const KEY_DOWN: u32 = 0x51;
+pub const KEY_UP: u32 = 0x52;
+
+// Function keys (F1-F12)
+pub const KEY_F1: u32 = 0x3A;
+pub const KEY_F2: u32 = 0x3B;
+pub const KEY_F3: u32 = 0x3C;
+pub const KEY_F4: u32 = 0x3D;
+pub const KEY_F5: u32 = 0x3E;
+pub const KEY_F6: u32 = 0x3F;
+pub const KEY_F7: u32 = 0x40;
+pub const KEY_F8: u32 = 0x41;
+pub const KEY_F9: u32 = 0x42;
+pub const KEY_F10: u32 = 0x43;
+pub const KEY_F11: u32 = 0x44;
+pub const KEY_F12: u32 = 0x45;
+
 // Key encoding functions
 pub const key_encoder_new = c.ghostty_key_encoder_new;
 pub const key_encoder_free = c.ghostty_key_encoder_free;

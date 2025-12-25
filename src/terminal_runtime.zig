@@ -10,25 +10,46 @@ const std = @import("std");
 const ghostty = @import("libghostty.zig");
 const policy = @import("policy_engine.zig");
 
-/// Result of a paste validation
+/// Result of a paste validation check by the policy engine.
+///
+/// Determines how paste content should be handled based on safety analysis
+/// and configured policies. The terminal uses libghostty's paste safety check
+/// combined with the policy engine to classify paste operations.
 pub const PasteVerdict = enum {
-    safe_auto, // Safe content, can auto-inject
-    unsafe_needs_confirm, // Unsafe content, needs user confirmation
-    rejected, // Rejected by policy
+    /// Content is safe and can be auto-injected without user confirmation.
+    /// Typically plain text without control characters or escape sequences.
+    safe_auto,
+
+    /// Content contains potentially unsafe patterns (control chars, escape sequences)
+    /// and requires explicit user confirmation before injection.
+    unsafe_needs_confirm,
+
+    /// Content was rejected by policy and should not be injected.
+    /// The paste operation should be aborted entirely.
+    rejected,
 };
 
-/// Result of a paste operation with policy decision
+/// Result of a paste operation after policy evaluation.
+///
+/// Contains the encoded paste sequence (wrapped in bracketed paste delimiters
+/// if applicable), the policy verdict, and a human-readable explanation.
+///
+/// Memory ownership: The caller owns this struct and must call `deinit()`
+/// to free the allocated `bytes` and `rationale` slices.
 pub const PasteResult = struct {
-    /// Encoded bytes ready for injection (null if rejected)
+    /// Encoded bytes ready for PTY injection, wrapped in bracketed paste
+    /// delimiters (ESC[200~ ... ESC[201~). Null if the paste was rejected.
     bytes: ?[]const u8,
 
-    /// Policy verdict
+    /// Policy verdict determining how the paste should be handled.
     verdict: PasteVerdict,
 
-    /// Human-readable rationale
+    /// Human-readable explanation of the policy decision.
+    /// Useful for displaying to users when confirmation is required.
     rationale: []const u8,
 
-    /// Free owned memory
+    /// Free all owned memory (bytes and rationale slices).
+    /// Must be called by the caller when the result is no longer needed.
     pub fn deinit(self: *PasteResult, allocator: std.mem.Allocator) void {
         if (self.bytes) |b| {
             allocator.free(b);
@@ -37,50 +58,103 @@ pub const PasteResult = struct {
     }
 };
 
-/// Parameters for initializing the terminal runtime
+/// Configuration parameters for initializing a TerminalRuntime instance.
+///
+/// Controls terminal dimensions, scrollback buffer size, keyboard encoding
+/// options, and security policy settings. All fields have sensible defaults
+/// suitable for typical terminal usage.
 pub const InitParams = struct {
-    /// Number of columns in the terminal
+    /// Number of columns (width) in the terminal viewport. Default: 80.
     cols: u16 = 80,
 
-    /// Number of rows in the terminal
+    /// Number of rows (height) in the terminal viewport. Default: 24.
     rows: u16 = 24,
 
-    /// Maximum scrollback depth (number of lines)
+    /// Maximum number of lines to retain in the scrollback buffer.
+    /// Lines that scroll off the top of the viewport are stored here.
+    /// Set to 0 to disable scrollback. Default: 10000.
     scrollback_depth: u32 = 10000,
 
-    /// Custom allocator for libghostty (null = use default)
+    /// Optional custom allocator for libghostty internal allocations.
+    /// If null, libghostty uses its default allocator. Most callers
+    /// should leave this as null.
     allocator: ?*const ghostty.Allocator = null,
 
-    /// Enable Kitty keyboard protocol by default
+    /// Enable the Kitty keyboard protocol for enhanced key reporting.
+    /// When true, the terminal reports key events with additional metadata
+    /// like key release events and modifier disambiguation. Default: true.
     enable_kitty_keyboard: bool = true,
 
-    /// Kitty keyboard flags
+    /// Bitmask of Kitty keyboard protocol features to enable.
+    /// Only used when `enable_kitty_keyboard` is true.
+    /// Default: all features enabled (KITTY_KEY_ALL).
     kitty_flags: ghostty.KittyKeyFlags = ghostty.KITTY_KEY_ALL,
 
-    /// Policy configuration for OSC commands and operations
+    /// Security policy configuration for OSC commands and paste operations.
+    /// Controls which operations are allowed, require confirmation, or are
+    /// blocked entirely. Default: permissive policy.
     policy_config: policy.PolicyConfig = .{},
 };
 
-/// A single cell in the terminal framebuffer with character and styling
+/// A single cell in the terminal framebuffer representing one character position.
+///
+/// Each cell contains a character and its associated SGR (Select Graphic Rendition)
+/// styling attributes. The terminal grid is a 2D array of these cells.
+///
+/// Note: Currently simplified to single-byte ASCII characters. Wide characters
+/// and combining characters are not yet fully supported.
 pub const Cell = struct {
+    /// The character displayed in this cell (ASCII, default: space).
     char: u8 = ' ',
+
+    /// Foreground (text) color. Default: terminal default color.
     fg_color: Color = .none,
+
+    /// Background color. Default: terminal default color.
     bg_color: Color = .none,
+
+    /// Bold text attribute (SGR 1).
     bold: bool = false,
+
+    /// Faint/dim text attribute (SGR 2).
     faint: bool = false,
+
+    /// Italic text attribute (SGR 3).
     italic: bool = false,
-    underline: ghostty.SgrUnderline = 0, // GHOSTTY_SGR_UNDERLINE_NONE
+
+    /// Underline style (SGR 4, 4:1-4:5 for variants).
+    /// 0=none, 1=single, 2=double, 3=curly, 4=dotted, 5=dashed.
+    underline: ghostty.SgrUnderline = 0,
+
+    /// Inverse/reverse video attribute (SGR 7). Swaps fg/bg colors.
     inverse: bool = false,
+
+    /// Strikethrough attribute (SGR 9).
     strikethrough: bool = false,
+
+    /// Blink attribute (SGR 5).
     blink: bool = false,
 };
 
-/// Color representation supporting 8-color, 256-color, and RGB
+/// Color representation supporting terminal color modes.
+///
+/// Terminals support multiple color formats:
+/// - 8-color: Standard ANSI colors (0-7, with bright variants 8-15)
+/// - 256-color: Extended palette (16-231: 6x6x6 cube, 232-255: grayscale)
+/// - True color (RGB): 24-bit color with individual R, G, B components
 pub const Color = union(enum) {
+    /// No color specified; use terminal default.
     none,
-    indexed: u8, // 0-255 for 8/256 color palette
+
+    /// Indexed color from the 8/256-color palette.
+    /// 0-7: standard colors, 8-15: bright colors,
+    /// 16-231: 6x6x6 color cube, 232-255: grayscale ramp.
+    indexed: u8,
+
+    /// True color (24-bit RGB).
     rgb: struct { r: u8, g: u8, b: u8 },
 
+    /// Compare two colors for equality.
     pub fn eql(self: Color, other: Color) bool {
         return switch (self) {
             .none => other == .none,
@@ -96,10 +170,18 @@ pub const Color = union(enum) {
     }
 };
 
-/// Cursor display style
+/// Cursor display style for the terminal.
+///
+/// Matches the standard terminal cursor shapes that can be set via
+/// DECSCUSR (CSI Ps SP q) escape sequences.
 pub const CursorStyle = enum {
+    /// Solid block cursor (fills the entire cell).
     block,
+
+    /// Underline cursor (thin line at bottom of cell).
     underline,
+
+    /// Vertical bar cursor (thin line at left of cell, I-beam style).
     bar,
 };
 
@@ -111,7 +193,27 @@ const ParseState = enum {
     osc, // Saw ESC], collecting OSC data
 };
 
-/// Terminal Runtime manages all libghostty-vt interactions
+/// Terminal emulator runtime built on libghostty-vt.
+///
+/// Manages the terminal framebuffer, cursor state, scrollback buffer,
+/// escape sequence parsing (CSI/SGR/OSC), and input encoding. This is the
+/// core component for maintaining terminal state in sly.
+///
+/// ## Lifecycle
+/// 1. Create with `init()`, passing desired dimensions and options
+/// 2. Feed PTY output bytes via `feedBytes()` to update state
+/// 3. Encode keyboard input via `encodeKeyEvent()` or `injectText()`
+/// 4. Take snapshots via `snapshot()` for LLM context
+/// 5. Clean up with `shutdown()` when done
+///
+/// ## Memory Ownership
+/// The runtime owns all internal buffers (framebuffer, scrollback, OSC events).
+/// Snapshots return owned copies that the caller must free via `Snapshot.deinit()`.
+/// Encoded key bytes are caller-owned and must be freed with the runtime's allocator.
+///
+/// ## Thread Safety
+/// Not thread-safe. All operations must be performed from a single thread,
+/// or external synchronization must be provided.
 pub const TerminalRuntime = struct {
     /// Zig allocator for runtime data structures
     allocator: std.mem.Allocator,
@@ -162,7 +264,22 @@ pub const TerminalRuntime = struct {
     /// Whether we're currently in alternate screen mode
     is_alternate_screen: bool = false,
 
-    /// Initialize a new terminal runtime
+    /// Initialize a new terminal runtime with the given configuration.
+    ///
+    /// Creates the framebuffer, initializes libghostty parsers (key encoder,
+    /// SGR parser, OSC parser), and sets up the policy engine.
+    ///
+    /// Parameters:
+    /// - `allocator`: Zig allocator for all runtime memory allocations.
+    /// - `params`: Configuration options (dimensions, scrollback, policies).
+    ///
+    /// Returns: Initialized runtime, or error if libghostty initialization fails.
+    ///
+    /// Errors:
+    /// - `error.KeyEncoderCreationFailed`: libghostty key encoder init failed
+    /// - `error.SgrParserCreationFailed`: libghostty SGR parser init failed
+    /// - `error.OscParserCreationFailed`: libghostty OSC parser init failed
+    /// - `error.OutOfMemory`: allocation failure
     pub fn init(allocator: std.mem.Allocator, params: InitParams) !TerminalRuntime {
         var runtime = TerminalRuntime{
             .allocator = allocator,
@@ -247,7 +364,14 @@ pub const TerminalRuntime = struct {
         return runtime;
     }
 
-    /// Shutdown and free all resources
+    /// Shutdown the terminal runtime and free all resources.
+    ///
+    /// Releases libghostty parsers, frees the framebuffer, scrollback buffer,
+    /// alternate screen buffer (if active), and all OSC events. Logs policy
+    /// statistics before shutdown.
+    ///
+    /// After calling shutdown, the runtime is in an undefined state and
+    /// must not be used further.
     pub fn shutdown(self: *TerminalRuntime) void {
         if (self.osc_parser != null) {
             ghostty.osc_free(self.osc_parser);
@@ -295,7 +419,13 @@ pub const TerminalRuntime = struct {
         std.log.info("Terminal runtime shutdown - {any}", .{stats});
     }
 
-    /// Reset the terminal to initial state
+    /// Reset the terminal to its initial state.
+    ///
+    /// Clears the framebuffer (fills with empty cells), resets cursor to
+    /// origin (0, 0), resets all styling attributes, and clears accumulated
+    /// OSC events. Does not affect scrollback buffer or terminal dimensions.
+    ///
+    /// Useful for implementing terminal reset sequences or starting fresh.
     pub fn reset(self: *TerminalRuntime) !void {
         // Clear framebuffer - reset all cells to default
         for (self.framebuffer.items) |*row| {
@@ -320,7 +450,23 @@ pub const TerminalRuntime = struct {
         std.log.info("Terminal runtime reset", .{});
     }
 
-    /// Resize the terminal viewport with content reflow
+    /// Resize the terminal viewport to new dimensions.
+    ///
+    /// Handles both expansion and shrinking of the viewport:
+    /// - Column expansion: Pads rows with empty cells
+    /// - Column shrinking: Truncates rows (content is lost)
+    /// - Row expansion: Adds empty rows at the bottom
+    /// - Row shrinking: Moves excess rows to scrollback buffer
+    ///
+    /// The cursor position is clamped to remain within the new bounds.
+    /// Scrollback rows are also resized to match the new column width.
+    ///
+    /// Parameters:
+    /// - `cols`: New number of columns (width)
+    /// - `rows`: New number of rows (height)
+    ///
+    /// Note: This is a basic resize without true content reflow. Wide content
+    /// may be truncated when shrinking columns.
     pub fn resize(self: *TerminalRuntime, cols: u16, rows: u16) !void {
         const old_cols = self.cols;
         const old_rows = self.rows;
@@ -418,7 +564,19 @@ pub const TerminalRuntime = struct {
         kitty_flags: ?ghostty.KittyKeyFlags = null,
     };
 
-    /// Configure key encoder options at runtime
+    /// Configure the libghostty key encoder at runtime.
+    ///
+    /// Allows dynamic adjustment of keyboard encoding behavior, such as
+    /// enabling/disabling application cursor mode or changing Kitty protocol
+    /// flags. Only non-null fields in the options struct are applied.
+    ///
+    /// Parameters:
+    /// - `options`: Struct with optional fields for each setting. Only
+    ///   non-null fields will be applied to the encoder.
+    ///
+    /// Common use cases:
+    /// - Responding to DECCKM (cursor key mode) escape sequences
+    /// - Adjusting Kitty keyboard flags based on application requests
     pub fn setKeyEncoderOptions(self: *TerminalRuntime, options: KeyEncoderOptions) void {
         if (options.cursor_key_application) |value| {
             var val = value;
@@ -491,7 +649,20 @@ pub const TerminalRuntime = struct {
         }
     }
 
-    /// Feed bytes from PTY output into the terminal
+    /// Feed bytes from PTY output into the terminal for processing.
+    ///
+    /// Parses the byte stream for printable characters and escape sequences:
+    /// - Printable characters are added to the framebuffer at cursor position
+    /// - Control characters (CR, LF, TAB, BS) move the cursor
+    /// - CSI sequences (ESC[) are parsed for cursor movement, SGR styling, etc.
+    /// - OSC sequences (ESC]) are parsed and added to the OSC event queue
+    ///
+    /// Parameters:
+    /// - `bytes`: Raw bytes from PTY output (may contain partial sequences)
+    ///
+    /// Errors:
+    /// - `error.OutOfMemory`: allocation failure during parsing
+    /// - `error.CursorOutOfBounds`: internal consistency error
     pub fn feedBytes(self: *TerminalRuntime, bytes: []const u8) !void {
         std.log.debug("Feeding {} bytes to terminal", .{bytes.len});
 
@@ -1170,9 +1341,21 @@ pub const TerminalRuntime = struct {
         return try self.encodeKeyEvent(event);
     }
 
-    /// Inject a text string as individual key events
-    /// Returns an owned concatenated byte slice ready for PTY injection
-    /// Caller is responsible for freeing the returned slice
+    /// Inject a text string as individual key press events.
+    ///
+    /// Converts each character in the text to a key event and encodes it
+    /// using the libghostty key encoder. Useful for programmatic text input.
+    ///
+    /// Parameters:
+    /// - `text`: UTF-8 text to inject (currently ASCII only)
+    ///
+    /// Returns: Concatenated encoded bytes ready for PTY injection.
+    ///
+    /// Memory: Caller owns the returned slice and must free it using
+    /// the runtime's allocator.
+    ///
+    /// Note: For paste operations, prefer `enqueuePaste()` which adds
+    /// bracketed paste delimiters and applies security policy checks.
     pub fn injectText(self: *TerminalRuntime, text: []const u8) ![]const u8 {
         var result = std.ArrayList(u8){};
         errdefer result.deinit(self.allocator);
@@ -1190,9 +1373,22 @@ pub const TerminalRuntime = struct {
         return try result.toOwnedSlice(self.allocator);
     }
 
-    /// Encode a key event with automatic buffer growth
-    /// Starts with 128 bytes and doubles on OUT_OF_MEMORY
-    fn encodeKeyEvent(self: *TerminalRuntime, event: ghostty.KeyEvent) ![]const u8 {
+    /// Encode a key event using libghostty with automatic buffer growth.
+    ///
+    /// Starts with a 128-byte buffer and doubles on each OUT_OF_MEMORY
+    /// error up to 4KB max. This handles variable-length key encodings
+    /// (e.g., Kitty protocol extended sequences).
+    ///
+    /// Parameters:
+    /// - `event`: libghostty key event to encode
+    ///
+    /// Returns: Encoded key sequence bytes. Caller owns and must free.
+    ///
+    /// Errors:
+    /// - `error.KeyEncodingFailed`: libghostty encoding error
+    /// - `error.KeyEncodingBufferExhausted`: exceeded 4KB buffer limit
+    /// - `error.OutOfMemory`: allocation failure
+    pub fn encodeKeyEvent(self: *TerminalRuntime, event: ghostty.KeyEvent) ![]const u8 {
         var buffer_size: usize = 128;
         const max_size: usize = 4096; // Safety limit
 
@@ -1237,8 +1433,33 @@ pub const TerminalRuntime = struct {
         return error.KeyEncodingBufferExhausted;
     }
 
-    /// Enqueue a paste buffer (will be validated before injection)
-    /// Returns the encoded paste sequence ready for PTY injection and the policy decision
+    /// Validate and prepare a paste buffer for PTY injection.
+    ///
+    /// Performs security checks on the paste content:
+    /// 1. Checks for unsafe content using libghostty's paste safety analysis
+    /// 2. Evaluates the paste against the configured security policy
+    /// 3. Wraps safe content in bracketed paste delimiters (ESC[200~ / ESC[201~)
+    ///
+    /// Parameters:
+    /// - `text`: The raw text to paste
+    ///
+    /// Returns: PasteResult containing:
+    /// - `bytes`: Encoded paste sequence (null if rejected)
+    /// - `verdict`: Policy decision (safe_auto, unsafe_needs_confirm, rejected)
+    /// - `rationale`: Human-readable explanation for the decision
+    ///
+    /// Memory: Caller owns the result and must call `PasteResult.deinit()`.
+    ///
+    /// Usage pattern:
+    /// ```zig
+    /// var result = try runtime.enqueuePaste(clipboard_text);
+    /// defer result.deinit(allocator);
+    /// switch (result.verdict) {
+    ///     .safe_auto => writeTopty(result.bytes.?),
+    ///     .unsafe_needs_confirm => promptUser(result.rationale),
+    ///     .rejected => logRejection(result.rationale),
+    /// }
+    /// ```
     pub fn enqueuePaste(self: *TerminalRuntime, text: []const u8) !PasteResult {
         // Check if paste is safe using libghostty
         const is_safe = ghostty.paste_is_safe(text.ptr, text.len);
@@ -1300,7 +1521,25 @@ pub const TerminalRuntime = struct {
         return self.policy_engine.getStats();
     }
 
-    /// Create an immutable snapshot of current terminal state
+    /// Create an immutable snapshot of the current terminal state.
+    ///
+    /// Creates deep copies of the framebuffer, scrollback (if requested),
+    /// and OSC events. Computes a content hash for change detection.
+    ///
+    /// Parameters:
+    /// - `options`: Controls what to include in the snapshot:
+    ///   - `include_scrollback`: Whether to copy scrollback buffer
+    ///   - `scrollback_lines`: Max scrollback lines to include
+    ///
+    /// Returns: Immutable Snapshot struct with copied data.
+    ///
+    /// Memory: Caller owns the snapshot and must call `Snapshot.deinit()`
+    /// to free the copied framebuffer, scrollback, and OSC events.
+    ///
+    /// Use cases:
+    /// - Capturing terminal state for LLM context (`formatSnapshotForPrompt`)
+    /// - Change detection via hash comparison
+    /// - Audit trails for command execution
     pub fn snapshot(self: *TerminalRuntime, options: SnapshotOptions) !Snapshot {
         // Copy framebuffer
         var fb_copy = try self.allocator.alloc([]Cell, self.framebuffer.items.len);
@@ -1402,24 +1641,35 @@ pub const TerminalRuntime = struct {
     }
 };
 
-/// OSC event from the terminal
+/// An Operating System Command (OSC) event parsed from the terminal stream.
+///
+/// OSC sequences (ESC ] ... BEL/ST) are used for shell integration, clipboard
+/// access, window title changes, hyperlinks, and other out-of-band signaling.
+/// Events are accumulated and can be retrieved via `drainOsc()`.
+///
+/// Memory ownership: The event owns its `payload` and `rationale` slices.
+/// Call `deinit()` to free them when the event is no longer needed.
 pub const OscEvent = struct {
-    /// The type of OSC command
+    /// The libghostty OSC command type identifier.
+    /// Common types: CHANGE_WINDOW_TITLE, PROMPT_START, PROMPT_END, etc.
     command_type: ghostty.OscCommandType,
 
-    /// Optional payload data (owned by the event)
+    /// Command-specific payload data (e.g., window title text).
+    /// Owned by this event; freed on `deinit()`.
     payload: ?[]u8 = null,
 
-    /// Policy decision: whether this event is allowed automatically
+    /// Whether this event passed policy checks for automatic execution.
+    /// If false, the event may require user confirmation.
     allowed: bool = true,
 
-    /// Whether this event needs user confirmation
+    /// Whether user confirmation is required before acting on this event.
     needs_confirmation: bool = false,
 
-    /// Policy rationale (owned by the event)
+    /// Human-readable explanation of the policy decision.
+    /// Owned by this event; freed on `deinit()`.
     rationale: ?[]u8 = null,
 
-    /// Free owned memory
+    /// Free all owned memory (payload and rationale slices).
     pub fn deinit(self: *OscEvent, allocator: std.mem.Allocator) void {
         if (self.payload) |p| {
             allocator.free(p);
@@ -1432,38 +1682,74 @@ pub const OscEvent = struct {
     }
 };
 
-/// Options for creating a snapshot
+/// Configuration options for `TerminalRuntime.snapshot()`.
+///
+/// Controls what data is included in the snapshot to balance completeness
+/// against memory usage and performance.
 pub const SnapshotOptions = struct {
+    /// Include scrollback buffer content in the snapshot.
+    /// Set to false for viewport-only snapshots. Default: true.
     include_scrollback: bool = true,
+
+    /// Maximum number of scrollback lines to include (most recent).
+    /// Ignored if `include_scrollback` is false. Default: 100.
     scrollback_lines: u32 = 100,
 };
 
-/// Immutable snapshot of terminal state
+/// Immutable snapshot of terminal state at a point in time.
+///
+/// Contains deep copies of all terminal state: framebuffer, scrollback,
+/// cursor position/style, and OSC events. The hash provides a fingerprint
+/// for efficient change detection.
+///
+/// Memory ownership: All slices are owned by the snapshot. Call `deinit()`
+/// to free all memory when the snapshot is no longer needed.
+///
+/// Use cases:
+/// - Extracting terminal content for LLM prompts (via `formatSnapshotForPrompt`)
+/// - Change detection between snapshots (compare `hash` values)
+/// - Audit trails and debugging
 pub const Snapshot = struct {
+    /// Wyhash fingerprint of the framebuffer and cursor position.
+    /// Use for efficient change detection between snapshots.
     hash: u64,
+
+    /// Unix timestamp (milliseconds) when the snapshot was created.
     timestamp: i64,
+
+    /// Terminal dimensions at snapshot time.
     rows: u16,
     cols: u16,
 
-    /// Viewport content (current visible screen)
+    /// Viewport content (current visible screen). Array of rows,
+    /// each row is an array of Cell structs.
     framebuffer: []const []const Cell,
 
-    /// Scrollback content (lines that have scrolled off top, oldest first)
+    /// Scrollback content (lines that scrolled off top).
+    /// Ordered oldest-first. Empty if scrollback was not included.
     scrollback: []const []const Cell,
 
-    /// Cursor position
+    /// Cursor row position (0-indexed).
     cursor_row: u16,
+
+    /// Cursor column position (0-indexed).
     cursor_col: u16,
 
-    /// Cursor visibility and style
+    /// Whether the cursor is currently visible.
     cursor_visible: bool,
+
+    /// Cursor display style (block, underline, or bar).
     cursor_style: CursorStyle,
+
+    /// Whether the cursor is blinking.
     cursor_blinking: bool,
 
-    /// Recent OSC events
+    /// OSC events accumulated since the last drain.
+    /// Includes shell integration markers, title changes, etc.
     osc_events: []const OscEvent,
 
-    /// Free snapshot memory
+    /// Free all snapshot memory (framebuffer, scrollback, OSC events).
+    /// Must be called by the caller when the snapshot is no longer needed.
     pub fn deinit(self: *Snapshot, allocator: std.mem.Allocator) void {
         for (self.framebuffer) |row| {
             allocator.free(row);
@@ -1477,7 +1763,36 @@ pub const Snapshot = struct {
     }
 };
 
-/// Format a terminal snapshot for LLM context
+/// Format a terminal snapshot as text suitable for LLM prompts.
+///
+/// Converts the snapshot into a human-readable text format containing:
+/// - Header with terminal dimensions
+/// - Cursor position
+/// - Last N non-empty lines from the framebuffer (max 10)
+/// - Safe OSC events (title changes, shell integration markers)
+///
+/// Sensitive OSC events (clipboard operations) are filtered out for security.
+///
+/// Parameters:
+/// - `allocator`: Allocator for the output buffer
+/// - `snapshot`: The snapshot to format
+///
+/// Returns: Owned string slice containing the formatted output.
+///
+/// Memory: Caller owns the returned slice and must free it.
+///
+/// Example output:
+/// ```
+/// Terminal State (80x24):
+/// Cursor: row 5, col 12
+///   | $ ls -la
+///   | total 42
+///   | drwxr-xr-x  5 user group ...
+///
+/// Recent Shell Events:
+///   - Prompt Start
+///   - End of Input
+/// ```
 pub fn formatSnapshotForPrompt(allocator: std.mem.Allocator, snapshot: *const Snapshot) ![]u8 {
     var buf = std.ArrayList(u8){};
     errdefer buf.deinit(allocator);

@@ -74,8 +74,8 @@ pub const PtySession = struct {
     /// Slave side of the PTY (child process uses this)
     slave: posix.fd_t,
 
-    /// Child process handle
-    process: ?std.process.Child,
+    /// Child process ID from fork
+    child_pid: posix.pid_t,
 
     /// Terminal runtime for output processing
     runtime: *terminal_runtime.TerminalRuntime,
@@ -156,7 +156,7 @@ pub const PtySession = struct {
         return PtySession{
             .master = master_fd,
             .slave = 0, // closed
-            .process = null, // We'll wait via pid
+            .child_pid = pid,
             .runtime = runtime,
             .allocator = allocator,
         };
@@ -224,11 +224,9 @@ pub const PtySession = struct {
             total_bytes += bytes_read;
         }
 
-        // Wait for process (non-blocking check)
-        var exit_code: i32 = 0;
-        // TODO: Implement proper process wait using pid
-        // For now, assume success
-        exit_code = 0;
+        // Wait for child process and get exit code
+        const wait_result = posix.waitpid(self.child_pid, 0);
+        const exit_code: i32 = if (wait_result.status.Exited) |code| @intCast(code) else -1;
 
         // Capture final snapshot
         const snapshot = try self.runtime.snapshot(.{});
@@ -256,8 +254,6 @@ fn childSetup(
     argv: []const []const u8,
     env_map: ?*const std.process.EnvMap,
 ) !void {
-    _ = env_map; // TODO: Apply environment variables
-
     // Create new session
     _ = c.setsid();
 
@@ -287,8 +283,21 @@ fn childSetup(
         argv_z[i] = alloc.dupeZ(u8, arg) catch posix.exit(1);
     }
 
-    // Use current environment
-    const envp: [*:null]const ?[*:0]const u8 = @extern([*:null]const ?[*:0]const u8, .{ .name = "environ" });
+    // Build environment: use provided env_map or fall back to current environment
+    const envp: [*:null]const ?[*:0]const u8 = if (env_map) |em| blk: {
+        const env_count = em.count();
+        const envp_buf = alloc.allocSentinel(?[*:0]const u8, env_count, null) catch posix.exit(1);
+        var i: usize = 0;
+        var iter = em.iterator();
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+            const env_str = std.fmt.allocPrintZ(alloc, "{s}={s}", .{ key, value }) catch posix.exit(1);
+            envp_buf[i] = env_str.ptr;
+            i += 1;
+        }
+        break :blk envp_buf.ptr;
+    } else @extern([*:null]const ?[*:0]const u8, .{ .name = "environ" });
 
     // Execute command using execvpe
     const err = posix.execvpeZ_expandArg0(.no_expand, argv_z[0].?, argv_z[0..argv.len :null], envp);

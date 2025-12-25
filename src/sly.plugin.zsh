@@ -27,6 +27,7 @@ _sly_run_with_timeout() {
 
 _sly_exec() {
   local query="$1"
+  local saved_buffer="$BUFFER"
   
   # Ensure sly binary is available
   if ! command -v sly >/dev/null 2>&1; then
@@ -42,7 +43,15 @@ _sly_exec() {
   
   local tmp
   tmp="$(mktemp -t sly.XXXXXX)"
-  trap "rm -f '$tmp'" EXIT INT TERM
+  
+  # Cleanup function for interrupt handling
+  _sly_cleanup() {
+    rm -f "$tmp"
+    BUFFER="$saved_buffer"
+    zle redisplay
+  }
+  trap '_sly_cleanup; return 130' INT
+  trap "rm -f '$tmp'" EXIT TERM
   
   # Capture recent terminal output for context
   local context=""
@@ -69,24 +78,42 @@ _sly_exec() {
 
   # Spinner animation (can be disabled with SLY_SPINNER=0)
   if [[ "${SLY_SPINNER:-1}" -eq 1 ]]; then
-    local spinner_chars='/-\|'
+    local spinner_chars=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
     local i=0
+    local interrupted=0
+    
+    trap 'interrupted=1' INT
+    
     while kill -0 "$pid" 2>/dev/null; do
-      printf '\rGenerating... %s' "${spinner_chars:$((i % 4)):1}"
+      if [[ $interrupted -eq 1 ]]; then
+        kill "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+        rm -f "$tmp"
+        trap - INT EXIT TERM
+        BUFFER="$saved_buffer"
+        zle redisplay
+        return 130
+      fi
+      BUFFER="Generating... ${spinner_chars[$((i % 10))]}"
+      zle redisplay
       ((i++))
       sleep 0.1
     done
-    printf '\r%s\r' "                " # Clear the spinner line
+    BUFFER=""
+    zle redisplay
   fi
+  
   wait "$pid" 2>/dev/null
+  local wait_rc=$?
+  
+  trap - INT EXIT TERM
 
-  local plan_json rc
-  plan_json="$(cat "$tmp")"; rc=$?
+  local plan_json
+  plan_json="$(cat "$tmp")"
   rm -f "$tmp"
-  trap - EXIT INT TERM
 
   # Check for timeout (exit code 124)
-  if [[ $rc -eq 124 ]]; then
+  if [[ $wait_rc -eq 124 ]]; then
     if [[ "${SLY_COLOR:-1}" -eq 1 ]]; then
       print -P "%F{red}❌ Generation timed out after ${timeout_val}s%f"
     else
@@ -97,7 +124,7 @@ _sly_exec() {
     return 0
   fi
 
-  if [[ $rc -eq 0 && -n "$plan_json" && "$plan_json" != Error:* && "$plan_json" != API\ Error:* ]]; then
+  if [[ $wait_rc -eq 0 && -n "$plan_json" && "$plan_json" != Error:* && "$plan_json" != API\ Error:* ]]; then
     # Validate JSON structure before parsing
     local cmd
     if command -v jq >/dev/null 2>&1; then

@@ -87,12 +87,20 @@ function __sly_expand
     # Call sly plan with optional spinner
     set -l tmp (mktemp -t sly.XXXXXX)
     
+    # Track if we were interrupted
+    set -l interrupted 0
+    
+    # Set up interrupt handler
+    function __sly_on_interrupt --on-signal INT
+        set interrupted 1
+    end
+    
     if test -n "$context"
         __sly_run_with_timeout $timeout_val sly plan --query "$query" --context "$context" >$tmp 2>/dev/null &
     else
         __sly_run_with_timeout $timeout_val sly plan --query "$query" >$tmp 2>/dev/null &
     end
-    set -l pid (jobs -lp | tail -1)
+    set -l pid $last_pid
     
     # Spinner animation (can be disabled with SLY_SPINNER=0)
     set -l spinner_enabled 1
@@ -101,24 +109,47 @@ function __sly_expand
     end
     
     if test "$spinner_enabled" != "0"
-        set -l spinner_chars "/" "-" "\\" "|"
+        set -l spinner_chars "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"
         set -l i 1
         while kill -0 $pid 2>/dev/null
+            if test $interrupted -eq 1
+                kill -TERM $pid 2>/dev/null
+                break
+            end
             printf '\rGenerating... %s' $spinner_chars[$i]
-            set i (math "($i % 4) + 1")
+            set i (math "($i % 10) + 1")
             sleep 0.1
         end
         printf '\r%s\r' "                "
+    else
+        # No spinner, just wait
+        while kill -0 $pid 2>/dev/null
+            if test $interrupted -eq 1
+                kill -TERM $pid 2>/dev/null
+                break
+            end
+            sleep 0.1
+        end
+    end
+    
+    # Clean up interrupt handler
+    functions -e __sly_on_interrupt
+    
+    # Handle interrupt
+    if test $interrupted -eq 1
+        rm -f $tmp
+        commandline -r ""
+        return
     end
     
     # Wait for background job and get exit status
     wait $pid 2>/dev/null
-    set -l rc $status
+    set -l wait_rc $status
     set -l plan_json (cat $tmp)
     rm -f $tmp
     
     # Check for timeout (exit code 124)
-    if test $rc -eq 124
+    if test $wait_rc -eq 124
         if test "$SLY_COLOR" != "0"
             set_color red
             echo "❌ Generation timed out after "$timeout_val"s"

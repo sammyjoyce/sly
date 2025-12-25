@@ -1,37 +1,90 @@
 /// Policy Engine - Security policy for OSC commands and terminal operations
 ///
-/// Phase 4: OSC Bus & Policy Engine
+/// This module implements the security policy system described in specs/06-SECURITY-POLICY.md.
+/// It acts as a trust boundary between untrusted PTY output (escape sequences, OSC commands,
+/// paste data) and the trusted user display zone.
 ///
-/// Provides typed OSC event routing with policy handlers that return
-/// allow/confirm/reject verdicts with rationale. Rejected commands never
-/// reach user surfaces.
+/// The engine intercepts terminal operations and returns allow/confirm/reject verdicts with
+/// human-readable rationale. Rejected commands never reach user surfaces.
+///
+/// ## Threat Model
+/// Protects against: command injection via paste, OSC escape attacks, clipboard hijacking
+/// (OSC 52), title spoofing, notification spam, and palette corruption.
+///
+/// ## Usage
+/// ```zig
+/// var engine = PolicyEngine.init(allocator, DEFAULT_POLICY);
+/// defer engine.deinit();
+///
+/// var decision = try engine.evaluateOsc(OSC_COMMAND_CLIPBOARD_CONTENTS, payload);
+/// defer decision.deinit(allocator);
+///
+/// if (decision.verdict == .allow) {
+///     // Execute the operation
+/// }
+/// ```
 const std = @import("std");
 const ghostty = @import("libghostty.zig");
 
-/// Policy verdict for an OSC command or terminal operation
+/// Represents the security verdict for an OSC command or terminal operation.
+///
+/// This is the core decision type used throughout the policy engine. Each terminal
+/// operation is evaluated against the configured policy and receives one of three
+/// verdicts that determine how the system should proceed.
+///
+/// See specs/06-SECURITY-POLICY.md for the complete threat model and evaluation flow.
 pub const PolicyVerdict = enum {
-    /// Operation is allowed and can proceed automatically
+    /// Operation is safe and can proceed automatically without user interaction.
+    /// Used for trusted operations like shell integration markers (OSC 133) and
+    /// current directory reporting (OSC 7).
     allow,
 
-    /// Operation requires user confirmation before proceeding
+    /// Operation requires explicit user confirmation before proceeding.
+    /// The UI should display the operation details and await user approval.
+    /// Used for potentially dangerous operations like clipboard access (OSC 52)
+    /// and pastes containing newlines.
     confirm,
 
-    /// Operation is rejected and must not be executed
+    /// Operation is blocked and must not be executed.
+    /// Used for operations that violate security policy, such as clipboard
+    /// access in strict mode or unknown commands with default_unknown = .reject.
     reject,
 };
 
-/// Detailed policy decision with rationale
+/// A complete policy decision containing the verdict, rationale, and optional metadata.
+///
+/// Every policy evaluation returns a PolicyDecision that includes:
+/// - The verdict (allow/confirm/reject)
+/// - A human-readable rationale explaining why the decision was made
+/// - Optional metadata with details about the operation (e.g., payload preview)
+///
+/// The rationale and metadata strings are heap-allocated and owned by this struct.
+/// Callers must call `deinit()` to free the memory when done.
+///
+/// ## Example
+/// ```zig
+/// var decision = try engine.evaluateOsc(cmd_type, payload);
+/// defer decision.deinit(allocator);
+/// log.info("Verdict: {s} - {s}", .{@tagName(decision.verdict), decision.rationale});
+/// ```
 pub const PolicyDecision = struct {
-    /// The verdict
+    /// The security verdict for this operation.
     verdict: PolicyVerdict,
 
-    /// Human-readable rationale for the decision
+    /// Human-readable explanation of why this verdict was chosen.
+    /// Suitable for logging and user-facing messages.
+    /// Memory is owned by this struct; freed by `deinit()`.
     rationale: []const u8,
 
-    /// Optional metadata about the decision
+    /// Optional additional context about the operation.
+    /// May contain payload previews (truncated for safety), operation type, etc.
+    /// Memory is owned by this struct; freed by `deinit()`.
     metadata: ?[]const u8 = null,
 
-    /// Free any owned memory
+    /// Frees the heap-allocated rationale and metadata strings.
+    ///
+    /// Must be called when the decision is no longer needed to avoid memory leaks.
+    /// Uses the same allocator that was passed to the PolicyEngine.
     pub fn deinit(self: *PolicyDecision, allocator: std.mem.Allocator) void {
         allocator.free(self.rationale);
         if (self.metadata) |m| {
@@ -40,64 +93,116 @@ pub const PolicyDecision = struct {
     }
 };
 
-/// Policy configuration for different OSC command types
+/// Configuration for the policy engine controlling how different OSC command types are handled.
+///
+/// Each OSC command type has two flags:
+/// - `allow_*`: If false, the operation is rejected outright
+/// - `confirm_*`: If true (and allow is true), user confirmation is required
+///
+/// The evaluation priority is: confirm > allow > reject. If `confirm_*` is true,
+/// that takes precedence over `allow_*`.
+///
+/// ## Default Behavior
+/// The default configuration (DEFAULT_POLICY) provides balanced security:
+/// - Safe operations (title, hyperlinks, shell integration) are allowed
+/// - Sensitive operations (clipboard, palette) require confirmation
+/// - Potentially disruptive operations (notifications, mouse shape) are blocked
+///
+/// ## Environment Override
+/// Use `loadPolicyFromEnv()` to override settings via environment variables:
+/// - SLY_POLICY_STRICT=1 for maximum security
+/// - SLY_POLICY_PERMISSIVE=1 for convenience
+/// - SLY_ALLOW_OSC52=1 to enable clipboard without confirmation
+///
+/// See specs/06-SECURITY-POLICY.md for the complete configuration reference.
 pub const PolicyConfig = struct {
-    /// Allow window title changes
+    /// Allow OSC 0/2 window title changes. Default: true.
+    /// Title spoofing is low-risk but can be used for social engineering.
     allow_title_changes: bool = true,
 
-    /// Require confirmation for title changes
+    /// Require user confirmation for title changes. Default: false.
+    /// Enable in strict mode when running untrusted commands.
     confirm_title_changes: bool = false,
 
-    /// Allow icon name changes (OSC 1)
+    /// Allow OSC 1 window icon name changes. Default: true.
+    /// Similar risk profile to title changes.
     allow_icon_changes: bool = true,
 
-    /// Require confirmation for icon changes
+    /// Require user confirmation for icon changes. Default: false.
     confirm_icon_changes: bool = false,
 
-    /// Allow hyperlinks (OSC 8)
+    /// Allow OSC 8 hyperlinks in terminal output. Default: true.
+    /// Hyperlinks are generally safe but could link to malicious URLs.
     allow_hyperlinks: bool = true,
 
-    /// Require confirmation for hyperlinks
+    /// Require user confirmation before activating hyperlinks. Default: false.
     confirm_hyperlinks: bool = false,
 
-    /// Allow palette changes
+    /// Allow OSC 4/10/11 color palette modifications. Default: false.
+    /// Palette corruption can make terminal unreadable; blocked by default.
     allow_palette_changes: bool = false,
 
-    /// Require confirmation for palette changes
+    /// Require confirmation for palette changes. Default: true.
+    /// If allowed, still prompt user before changing colors.
     confirm_palette_changes: bool = true,
 
-    /// Allow OSC 52 (clipboard operations)
+    /// Allow OSC 52 clipboard read/write operations. Default: true.
+    /// Clipboard hijacking is a significant security risk.
     allow_osc52: bool = true,
 
-    /// Require confirmation for OSC 52
+    /// Require confirmation for clipboard operations. Default: true.
+    /// Always prompt before allowing programs to access clipboard.
     confirm_osc52: bool = true,
 
-    /// Allow OSC 7 (current directory reporting)
+    /// Allow OSC 7 current working directory reporting. Default: true.
+    /// Used by shell integration; low risk as it's informational only.
     allow_current_directory: bool = true,
 
-    /// Allow OSC 133 (shell integration markers)
+    /// Allow OSC 133 shell integration markers. Default: true.
+    /// Essential for prompt detection and command boundaries.
+    /// Markers: prompt start/end, command end, exit status.
     allow_shell_integration: bool = true,
 
-    /// Allow OSC 777 (notifications)
+    /// Allow OSC 9/777 desktop notifications. Default: false.
+    /// Notification spam is disruptive; blocked by default.
     allow_notifications: bool = false,
 
-    /// Require confirmation for notifications
+    /// Require confirmation for notifications. Default: true.
     confirm_notifications: bool = true,
 
-    /// Allow OSC 22 (mouse shape changes)
+    /// Allow OSC 22 mouse pointer shape changes. Default: false.
+    /// Can be confusing; blocked by default.
     allow_mouse_shape: bool = false,
 
-    /// Require confirmation for mouse shape changes
+    /// Require confirmation for mouse shape changes. Default: true.
     confirm_mouse_shape: bool = true,
 
-    /// Default behavior for unknown OSC commands
+    /// Verdict for unrecognized OSC commands. Default: .confirm.
+    /// Conservative default prompts user for unknown operations.
+    /// Set to .reject in strict mode, .allow in permissive mode.
     default_unknown: PolicyVerdict = .confirm,
 };
 
-/// Default (balanced) policy preset
+/// Default (balanced) policy preset.
+///
+/// Provides reasonable security for typical terminal usage:
+/// - Allows safe operations (title, icon, hyperlinks, shell integration)
+/// - Requires confirmation for sensitive operations (clipboard, palette)
+/// - Blocks potentially disruptive operations (notifications, mouse shape)
+/// - Prompts for unknown commands
+///
+/// Suitable for everyday use with trusted local shells.
 pub const DEFAULT_POLICY = PolicyConfig{};
 
-/// Strict policy preset - requires confirmation for most operations
+/// Strict policy preset for maximum security.
+///
+/// Use when running untrusted commands or remote sessions:
+/// - Requires confirmation for all visual changes (title, icon, hyperlinks)
+/// - Blocks clipboard access entirely (not just confirmation)
+/// - Blocks palette changes, notifications, and mouse shape
+/// - Rejects all unknown commands
+///
+/// Activate via SLY_POLICY_STRICT=1 environment variable.
 pub const STRICT_POLICY = PolicyConfig{
     .allow_title_changes = true,
     .confirm_title_changes = true,
@@ -118,7 +223,15 @@ pub const STRICT_POLICY = PolicyConfig{
     .default_unknown = .reject,
 };
 
-/// Permissive policy preset - allows most operations without confirmation
+/// Permissive policy preset for maximum convenience.
+///
+/// Use only in trusted environments where security is less critical:
+/// - Allows all operations without confirmation
+/// - Includes clipboard, notifications, palette changes, mouse shape
+/// - Allows unknown commands
+///
+/// WARNING: Reduces protection against malicious terminal escape sequences.
+/// Activate via SLY_POLICY_PERMISSIVE=1 environment variable.
 pub const PERMISSIVE_POLICY = PolicyConfig{
     .allow_title_changes = true,
     .confirm_title_changes = false,
@@ -139,14 +252,42 @@ pub const PERMISSIVE_POLICY = PolicyConfig{
     .default_unknown = .allow,
 };
 
-/// Policy Engine manages security policies for terminal operations
+/// The core policy engine that evaluates terminal operations against security policy.
+///
+/// PolicyEngine is the central security gatekeeper that sits between untrusted PTY
+/// output and the user display. It evaluates OSC commands and paste operations,
+/// returning verdicts that determine whether operations should proceed.
+///
+/// The engine maintains statistics for observability and audit logging.
+///
+/// ## Thread Safety
+/// Not thread-safe. Each terminal session should have its own PolicyEngine instance.
+///
+/// ## Memory Management
+/// The engine allocates memory for PolicyDecision rationale/metadata strings.
+/// Callers must call `PolicyDecision.deinit()` on returned decisions.
 pub const PolicyEngine = struct {
+    /// Allocator used for PolicyDecision strings.
     allocator: std.mem.Allocator,
+
+    /// Active policy configuration.
     config: PolicyConfig,
 
-    /// Statistics for observability
+    /// Cumulative statistics for monitoring and auditing.
     stats: PolicyStats,
 
+    /// Creates a new PolicyEngine with the specified configuration.
+    ///
+    /// The allocator is used for allocating PolicyDecision rationale and metadata
+    /// strings. Use the same allocator when calling `PolicyDecision.deinit()`.
+    ///
+    /// ## Parameters
+    /// - `allocator`: Memory allocator for decision strings
+    /// - `config`: Policy configuration (use DEFAULT_POLICY, STRICT_POLICY,
+    ///             PERMISSIVE_POLICY, or a custom config)
+    ///
+    /// ## Returns
+    /// Initialized PolicyEngine ready for use.
     pub fn init(allocator: std.mem.Allocator, config: PolicyConfig) PolicyEngine {
         return PolicyEngine{
             .allocator = allocator,
@@ -155,11 +296,35 @@ pub const PolicyEngine = struct {
         };
     }
 
+    /// Cleans up the PolicyEngine.
+    ///
+    /// Currently a no-op as the engine doesn't own any heap memory directly.
+    /// PolicyDecision memory is freed by the caller via `PolicyDecision.deinit()`.
     pub fn deinit(self: *PolicyEngine) void {
         _ = self;
     }
 
-    /// Evaluate policy for an OSC command
+    /// Evaluates an OSC command against the configured policy.
+    ///
+    /// This is the primary security evaluation function for escape sequences.
+    /// It checks the command type against the policy configuration and returns
+    /// a verdict with rationale.
+    ///
+    /// ## Parameters
+    /// - `command_type`: The OSC command type from libghostty (e.g., OSC_COMMAND_CLIPBOARD_CONTENTS)
+    /// - `payload`: Optional command payload (e.g., clipboard data, new title text).
+    ///              Payloads are truncated in metadata for safety (50-100 chars max).
+    ///
+    /// ## Returns
+    /// PolicyDecision containing the verdict and rationale. Caller must call
+    /// `decision.deinit(allocator)` when done.
+    ///
+    /// ## Errors
+    /// Returns allocation errors if rationale/metadata string allocation fails.
+    ///
+    /// ## Statistics
+    /// Updates internal statistics counters (total_osc_evaluations, allows,
+    /// confirmations, rejections, unknown_commands).
     pub fn evaluateOsc(self: *PolicyEngine, command_type: ghostty.OscCommandType, payload: ?[]const u8) !PolicyDecision {
         self.stats.total_osc_evaluations += 1;
 
@@ -415,7 +580,27 @@ pub const PolicyEngine = struct {
         return decision;
     }
 
-    /// Evaluate policy for paste operations
+    /// Evaluates a paste operation against the configured policy.
+    ///
+    /// Paste operations are evaluated based on libghostty's safety check, which
+    /// detects dangerous patterns like embedded newlines (command injection) or
+    /// bracketed paste escape sequences.
+    ///
+    /// ## Parameters
+    /// - `text`: The raw paste content to evaluate
+    /// - `is_safe`: Result from `ghostty.paste_is_safe()`. False if text contains
+    ///              newlines, bracketed paste end sequence, or other dangerous patterns.
+    ///
+    /// ## Returns
+    /// PolicyDecision with:
+    /// - `.allow` if is_safe is true (safe to paste automatically)
+    /// - `.confirm` if is_safe is false (user must approve potentially dangerous paste)
+    ///
+    /// Caller must call `decision.deinit(allocator)` when done.
+    ///
+    /// ## Security Note
+    /// Even when allowed, paste content should be wrapped in bracketed paste mode
+    /// (ESC[200~ ... ESC[201~) to protect terminal applications.
     pub fn evaluatePaste(self: *PolicyEngine, text: []const u8, is_safe: bool) !PolicyDecision {
         self.stats.total_paste_evaluations += 1;
 
@@ -443,37 +628,62 @@ pub const PolicyEngine = struct {
         }
     }
 
-    /// Get current statistics
+    /// Returns a copy of the current policy statistics.
+    ///
+    /// Use for monitoring, logging, and debugging policy decisions.
+    /// Statistics accumulate across all evaluations since init or last reset.
+    ///
+    /// ## Returns
+    /// Copy of PolicyStats struct with current counters.
     pub fn getStats(self: *const PolicyEngine) PolicyStats {
         return self.stats;
     }
 
-    /// Reset statistics
+    /// Resets all statistics counters to zero.
+    ///
+    /// Call periodically for rolling metrics or after logging a snapshot.
     pub fn resetStats(self: *PolicyEngine) void {
         self.stats = PolicyStats{};
     }
 };
 
-/// Policy engine statistics for observability
+/// Cumulative statistics for policy engine operations.
+///
+/// Used for monitoring, auditing, and debugging. Statistics are accumulated
+/// across all evaluations and can be reset via `PolicyEngine.resetStats()`.
+///
+/// ## Example Output (via format)
+/// ```
+/// PolicyStats{ osc=42, paste=5, allow=35, confirm=10, reject=2, unknown=0 }
+/// ```
+///
+/// ## Usage
+/// ```zig
+/// const stats = engine.getStats();
+/// log.info("Policy stats: {any}", .{stats});
+/// ```
 pub const PolicyStats = struct {
-    /// Total OSC evaluations
+    /// Total number of OSC command evaluations performed.
     total_osc_evaluations: u64 = 0,
 
-    /// Total paste evaluations
+    /// Total number of paste operation evaluations performed.
     total_paste_evaluations: u64 = 0,
 
-    /// Number of operations allowed
+    /// Number of operations that received `.allow` verdict.
     allows: u64 = 0,
 
-    /// Number of operations requiring confirmation
+    /// Number of operations that received `.confirm` verdict (pending user approval).
     confirmations: u64 = 0,
 
-    /// Number of operations rejected
+    /// Number of operations that received `.reject` verdict (blocked).
     rejections: u64 = 0,
 
-    /// Number of unknown commands encountered
+    /// Number of unrecognized OSC commands (handled by default_unknown policy).
     unknown_commands: u64 = 0,
 
+    /// Formats statistics for logging and display.
+    ///
+    /// Produces compact output: `PolicyStats{ osc=N, paste=N, allow=N, confirm=N, reject=N, unknown=N }`
     pub fn format(
         self: PolicyStats,
         comptime fmt: []const u8,
@@ -497,7 +707,29 @@ pub const PolicyStats = struct {
     }
 };
 
-/// Load policy configuration from environment variables
+/// Loads policy configuration from environment variables.
+///
+/// Allows runtime customization of security policy without code changes.
+/// Environment variables are checked in order of precedence.
+///
+/// ## Base Policy Selection (mutually exclusive, first match wins)
+/// - `SLY_POLICY_STRICT=1`: Start from STRICT_POLICY (maximum security)
+/// - `SLY_POLICY_PERMISSIVE=1`: Start from PERMISSIVE_POLICY (maximum convenience)
+/// - Neither: Start from DEFAULT_POLICY (balanced)
+///
+/// ## Override Flags (applied after base policy)
+/// - `SLY_ALLOW_OSC52=1`: Enable clipboard access without confirmation
+/// - `SLY_BLOCK_NOTIFICATIONS=1`: Block all desktop notifications
+/// - `SLY_ALLOW_PALETTE=1`: Enable palette changes without confirmation
+///
+/// ## Returns
+/// Configured PolicyConfig ready for use with PolicyEngine.init().
+///
+/// ## Example
+/// ```bash
+/// export SLY_POLICY_STRICT=1
+/// export SLY_ALLOW_OSC52=1  # Override to allow clipboard in strict mode
+/// ```
 pub fn loadPolicyFromEnv() PolicyConfig {
     var config = PolicyConfig{};
 

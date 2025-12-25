@@ -1,6 +1,6 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 30)
+**Last Updated:** 2025-12-26 (Work Session 31)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
@@ -28,11 +28,25 @@ This document tracks detailed implementation status for integrating libghostty-v
 | Phase 6: Shell Bridge & UX | ✅ Complete | 100% | zsh/bash plugins with SLY_TIMEOUT, SLY_SPINNER, SLY_COLOR env vars |
 | Phase 7: Conversation Orchestrator | ✅ Complete | 100% | Provider integration with context + schema validation |
 | Phase 8: WebAssembly Target | ⏳ Not Started | 0% | Deferred post-MVP |
-| Phase 9: Observability & Hardening | 🔄 Partial | 45% | Response parsing robustness added (Work Session 17) |
+| Phase 9: Observability & Hardening | 🔄 Partial | ~50% | Response parsing robustness added (Work Session 17), doc comments (Work Session 31) |
 
 **Overall Progress:** ~97% complete (all core functionality production-ready, awaiting real-world testing)
 
 ## Current Status
+
+### Work Session 31 Highlights (2025-12-26)
+
+**Bug Fixes:**
+- ✅ Fixed pty_manager environment variable application in child process setup
+
+**Documentation Improvements:**
+- ✅ Added comprehensive doc comments to terminal_runtime.zig public API
+- ✅ Added comprehensive doc comments to policy_engine.zig public API
+- ✅ Added comprehensive doc comments to command_planner.zig public API
+
+**Verification:**
+- ✅ All 130+ tests passing
+- ✅ Build clean with `zig build -Doptimize=ReleaseSafe`
 
 ### Work Session 30 Highlights (2025-12-26)
 
@@ -541,7 +555,7 @@ zig build test-ghostty   # Run libghostty integration tests
 
 ## Testing Status
 
-### ✅ Implemented Tests (34+ tests across 3 modules)
+### ✅ Implemented Tests (34+ tests across 3 modules, with comprehensive doc comments added in Work Session 31)
 
 **terminal_runtime.zig (17 tests):**
 - Terminal runtime initialization and resize

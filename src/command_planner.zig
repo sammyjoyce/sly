@@ -1,35 +1,77 @@
 /// Command Planner - Phase 5 Implementation
-/// Executes declarative plans through TerminalRuntime with validation and audit trails
+///
+/// Executes declarative command plans through TerminalRuntime with validation and audit trails.
+/// Provides the orchestration layer between LLM-generated CommandPlan JSON and the terminal
+/// emulator, handling key injection, snapshot comparison, and policy enforcement.
+///
+/// See specs/01-CORE-ARCHITECTURE.md for the CommandPlan schema specification.
 const std = @import("std");
 const terminal_runtime = @import("terminal_runtime.zig");
 const policy_engine = @import("policy_engine.zig");
 const ghostty = @import("libghostty.zig");
 
-/// Paste policy for command execution
+/// Paste safety policy controlling how stdin data is handled during plan execution.
+///
+/// Used by the policy engine to determine whether paste operations require user
+/// confirmation or should be automatically allowed/rejected.
 pub const PastePolicy = enum {
-    auto, // Execute without confirmation
-    needs_confirm, // Require user confirmation
-    never, // Never paste, reject
+    /// Execute paste without user confirmation (trusted input).
+    auto,
+    /// Require explicit user confirmation before pasting (default for untrusted input).
+    needs_confirm,
+    /// Never allow paste; reject the operation entirely.
+    never,
 };
 
-/// Confirmation mode for plan execution
+/// Confirmation mode controlling plan execution behavior.
+///
+/// Determines whether the command planner should execute plans automatically,
+/// show them for preview, or reject execution entirely.
 pub const ConfirmMode = enum {
-    auto, // Execute immediately
-    preview, // Show command before execution
-    reject, // Block execution
+    /// Execute the plan immediately without user intervention.
+    auto,
+    /// Display the command for user review before execution.
+    preview,
+    /// Block execution entirely; plan will return `.blocked` outcome.
+    reject,
 };
 
-/// Expected outcome after plan execution
+/// Defines an expected pattern to match against terminal output after plan execution.
+///
+/// Expectations are used to validate that a command produced the expected result.
+/// They can match literal substrings or simple regex patterns in the terminal framebuffer.
+///
+/// ## Example
+/// ```zig
+/// const exp = Expectation{
+///     .pattern = "^SUCCESS",
+///     .must_match = true,
+///     .is_regex = true,
+/// };
+/// ```
 pub const Expectation = struct {
-    /// Expected pattern in framebuffer/output
+    /// Pattern to search for in the terminal framebuffer/output.
+    /// Interpreted as literal substring unless `is_regex` is true.
     pattern: []const u8,
-    /// true = must contain, false = must not contain
+
+    /// If true, the pattern must be found for success.
+    /// If false, the pattern must NOT be found (negative assertion).
     must_match: bool = true,
-    /// true = interpret pattern as regex, false = literal substring
+
+    /// If true, interpret `pattern` as a simple regex with support for:
+    /// `^` (start anchor), `$` (end anchor), `.*` (zero or more chars), `.+` (one or more chars).
+    /// If false, `pattern` is matched as a literal substring.
     is_regex: bool = false,
 
-    /// Match pattern against text using simple regex subset or literal substring
-    /// Supports: ^ (start), $ (end), .* (any chars), .+ (one or more chars)
+    /// Match this expectation's pattern against the given text.
+    ///
+    /// Parameters:
+    /// - `text`: The text content to search (typically terminal framebuffer content).
+    ///
+    /// Returns: true if the pattern matches according to `is_regex` mode.
+    ///
+    /// Note: For regex mode, only a subset of regex syntax is supported:
+    /// `^`, `$`, `.`, `.*`, and `.+`. Full PCRE is not implemented.
     pub fn matches(self: Expectation, text: []const u8) bool {
         if (!self.is_regex) {
             return std.mem.indexOf(u8, text, self.pattern) != null;
@@ -175,65 +217,110 @@ fn matchAtPosition(pattern: []const u8, text: []const u8, start: usize, must_end
     return true;
 }
 
-/// Failure signal severity
+/// Severity level for failure signals, determining how matches are handled.
+///
+/// Controls the plan outcome when a failure signal pattern is detected.
 pub const FailureSeverity = enum {
+    /// Log a warning but continue execution; does not affect outcome.
     warning,
+    /// Mark as error; outcome depends on `exit_on_match` setting.
     err,
+    /// Critical failure; always results in `.failed` outcome immediately.
     critical,
 };
 
-/// Failure signal patterns to detect errors
+/// Defines a pattern that indicates command failure when detected in terminal output.
+///
+/// Failure signals are checked before expectations and can trigger early exit
+/// from plan execution. Useful for detecting error messages, exceptions, or
+/// other failure indicators in command output.
+///
+/// ## Example
+/// ```zig
+/// const signal = FailureSignal{
+///     .pattern = "ERROR:",
+///     .exit_on_match = true,
+///     .severity = .err,
+/// };
+/// ```
 pub const FailureSignal = struct {
-    /// Pattern in output that indicates failure
+    /// Pattern to search for in terminal output that indicates failure.
     pattern: []const u8,
-    /// Exit on match
+
+    /// If true, matching this pattern causes immediate failure (`.failed` outcome).
+    /// If false with `.err` severity, results in `.degraded` outcome instead.
     exit_on_match: bool = true,
-    /// Severity level for this failure
+
+    /// Severity level controlling how this signal affects plan execution.
     severity: FailureSeverity = .err,
 };
 
-/// Declarative command plan schema
+/// Declarative command plan schema representing an LLM-generated command to execute.
+///
+/// A CommandPlan encapsulates all information needed to execute a shell command,
+/// validate its output, and record an audit trail. Plans are typically generated
+/// by an LLM provider from natural language queries and parsed from JSON.
+///
+/// ## Schema (see specs/01-CORE-ARCHITECTURE.md)
+/// Required fields: `plan_id`, `command`
+/// Optional fields: `args`, `env`, `stdin`, `paste_policy`, `confirm_mode`,
+///                  `expectations`, `failure_signals`, `timeout_ms`, `retry_count`, `retry_delay_ms`
+///
+/// ## Memory Ownership
+/// When created via `fromJson`, the CommandPlan owns all allocated strings.
+/// Caller must call `deinit` to free memory when done.
 pub const CommandPlan = struct {
-    /// Plan identifier for audit trail
+    /// Unique identifier for this plan, used in audit trails and logging.
     plan_id: []const u8,
 
-    /// Command to execute
+    /// Base command to execute (e.g., "git", "find", "echo").
     command: []const u8,
 
-    /// Command arguments
+    /// Command arguments, passed after the base command.
     args: []const []const u8 = &.{},
 
-    /// Environment variables
+    /// Environment variables to set for this command (key-value pairs).
     env: std.StringHashMap([]const u8),
 
-    /// Standard input data
+    /// Standard input data to pipe to the command, if any.
     stdin: ?[]const u8 = null,
 
-    /// Paste safety policy
+    /// Paste safety policy for stdin handling.
     paste_policy: PastePolicy = .needs_confirm,
 
-    /// Confirmation mode
+    /// Confirmation mode controlling execution behavior.
     confirm_mode: ConfirmMode = .preview,
 
-    /// Expected outcomes
+    /// Expected patterns to validate in terminal output after execution.
     expectations: std.ArrayList(Expectation),
 
-    /// Failure signal patterns
+    /// Failure patterns that indicate command failure.
     failure_signals: std.ArrayList(FailureSignal),
 
-    /// Plan creation timestamp
+    /// Unix timestamp when this plan was created.
     created_at: i64 = 0,
 
-    /// Number of retries on failure (0 = no retries)
+    /// Number of retry attempts on `.failed` outcome (0 = no retries).
     retry_count: u8 = 0,
 
-    /// Base delay between retries in milliseconds
+    /// Base delay between retries in milliseconds; doubles each attempt (exponential backoff).
     retry_delay_ms: u64 = 1000,
 
-    /// Execution timeout in milliseconds (null = no timeout)
+    /// Maximum execution time in milliseconds. Returns `.timeout` if exceeded.
+    /// Null means no timeout limit.
     timeout_ms: ?u64 = null,
 
-    /// Parse from JSON string
+    /// Parse a CommandPlan from a JSON string.
+    ///
+    /// Parameters:
+    /// - `allocator`: Allocator for all string duplication. Caller retains ownership.
+    /// - `json_str`: JSON string conforming to the CommandPlan schema.
+    ///
+    /// Returns: A fully-initialized CommandPlan that owns all its string data.
+    ///
+    /// Errors: Returns error on invalid JSON or missing required fields (`plan_id`, `command`).
+    ///
+    /// Memory: Caller must call `deinit` on the returned plan to free memory.
     pub fn fromJson(allocator: std.mem.Allocator, json_str: []const u8) !CommandPlan {
         const parsed = try std.json.parseFromSlice(
             std.json.Value,
@@ -390,7 +477,12 @@ pub const CommandPlan = struct {
         };
     }
 
-    /// Free allocated memory
+    /// Free all memory owned by this CommandPlan.
+    ///
+    /// Parameters:
+    /// - `allocator`: The same allocator used to create this plan via `fromJson`.
+    ///
+    /// After calling, the CommandPlan is invalid and must not be used.
     pub fn deinit(self: *CommandPlan, allocator: std.mem.Allocator) void {
         allocator.free(self.plan_id);
         allocator.free(self.command);
@@ -421,17 +513,31 @@ pub const CommandPlan = struct {
         self.failure_signals.deinit(allocator);
     }
 
-    /// Serialize CommandPlan to JSON string (compact or pretty-printed)
+    /// Serialize this CommandPlan to a compact JSON string.
+    ///
+    /// Parameters:
+    /// - `allocator`: Allocator for the output string.
+    ///
+    /// Returns: Owned JSON string that caller must free.
+    ///
+    /// Note: For pretty-printed output, use `toJsonWithOptions` with `pretty: true`.
     pub fn toJson(self: CommandPlan, allocator: std.mem.Allocator) ![]const u8 {
         return self.toJsonWithOptions(allocator, .{});
     }
 
-    /// Options for JSON serialization
+    /// Options for JSON serialization output format.
     pub const JsonOptions = struct {
+        /// If true, output human-readable JSON with indentation and newlines.
         pretty: bool = false,
     };
 
-    /// Serialize CommandPlan to JSON string with formatting options
+    /// Serialize this CommandPlan to JSON with configurable formatting.
+    ///
+    /// Parameters:
+    /// - `allocator`: Allocator for the output string.
+    /// - `options`: Formatting options (e.g., pretty-print).
+    ///
+    /// Returns: Owned JSON string that caller must free.
     pub fn toJsonWithOptions(self: CommandPlan, allocator: std.mem.Allocator, options: JsonOptions) ![]const u8 {
         var output = std.ArrayList(u8){};
         errdefer output.deinit(allocator);
@@ -655,41 +761,65 @@ pub const CommandPlan = struct {
     }
 };
 
-/// Plan execution outcome
+/// Result of plan execution, indicating success, failure mode, or policy block.
+///
+/// Returned by `CommandPlanner.executePlan` to indicate how the plan completed.
 pub const PlanOutcome = enum {
-    success, // All expectations met
-    degraded, // Partial success
-    blocked, // Execution blocked by policy
-    failed, // Failure signals detected
-    timeout, // Execution exceeded timeout_ms
+    /// Plan executed successfully; all expectations met, no failure signals detected.
+    success,
+    /// Partial success; some expectations unmet but no critical failures.
+    degraded,
+    /// Execution was blocked by policy (e.g., `confirm_mode == .reject`).
+    blocked,
+    /// Failure signals were detected in terminal output.
+    failed,
+    /// Execution exceeded `timeout_ms` duration.
+    timeout,
 };
 
-/// Audit bundle for plan execution
+/// Audit record capturing the complete execution trace of a plan.
+///
+/// Contains snapshots before/after execution, keystream hash for reproducibility,
+/// OSC events, paste verdicts, and any error messages. Used for debugging,
+/// compliance logging, and post-hoc analysis of command execution.
+///
+/// ## Memory Ownership
+/// PlanAudit owns all its string data. Caller must call `deinit` to free.
 pub const PlanAudit = struct {
+    /// The plan_id of the executed plan (copied from CommandPlan).
     plan_id: []const u8,
+
+    /// Final outcome of the plan execution.
     outcome: PlanOutcome,
 
-    /// Hash of keystream sent to PTY
+    /// Wyhash of the keystream bytes sent to the PTY, for reproducibility verification.
     keystream_hash: u64,
 
-    /// Snapshot before execution
+    /// JSON-serialized terminal snapshot captured before command execution.
     snapshot_before: ?[]const u8 = null,
 
-    /// Snapshot after execution
+    /// JSON-serialized terminal snapshot captured after command execution.
     snapshot_after: ?[]const u8 = null,
 
-    /// OSC events recorded during execution
+    /// OSC escape sequence events recorded during execution.
     osc_events: std.ArrayList([]const u8),
 
-    /// Paste verdicts
+    /// Paste operation verdicts (allowed/rejected) recorded during execution.
     paste_verdicts: std.ArrayList([]const u8),
 
-    /// Execution timestamp
+    /// Unix timestamp when the audit was created.
     timestamp: i64,
 
-    /// Error message if any
+    /// Human-readable error message if execution failed, degraded, or was blocked.
     error_message: ?[]const u8 = null,
 
+    /// Initialize a new audit record for a plan.
+    ///
+    /// Parameters:
+    /// - `allocator`: Allocator for string storage.
+    /// - `plan_id`: The plan identifier to copy into this audit.
+    ///
+    /// Returns: A new PlanAudit with default `.success` outcome.
     pub fn init(allocator: std.mem.Allocator, plan_id: []const u8) !PlanAudit {
         return PlanAudit{
             .plan_id = try allocator.dupe(u8, plan_id),
@@ -701,6 +831,10 @@ pub const PlanAudit = struct {
         };
     }
 
+    /// Free all memory owned by this audit record.
+    ///
+    /// Parameters:
+    /// - `allocator`: The same allocator used in `init`.
     pub fn deinit(self: *PlanAudit, allocator: std.mem.Allocator) void {
         allocator.free(self.plan_id);
 
@@ -720,14 +854,37 @@ pub const PlanAudit = struct {
     }
 };
 
-/// Command Planner - orchestrates plan execution through TerminalRuntime
+/// Orchestrates execution of declarative command plans through TerminalRuntime.
+///
+/// The CommandPlanner is responsible for:
+/// - Building command strings from plan specifications
+/// - Injecting keystrokes into the terminal emulator
+/// - Capturing before/after snapshots for comparison
+/// - Validating output against expectations and failure signals
+/// - Recording audit trails for all executions
+///
+/// ## Usage
+/// ```zig
+/// var planner = CommandPlanner.init(allocator, &runtime);
+/// defer planner.deinit();
+///
+/// const outcome = try planner.executePlan(&plan);
+/// const audits = planner.getAudits();
+/// ```
 pub const CommandPlanner = struct {
     allocator: std.mem.Allocator,
     runtime: *terminal_runtime.TerminalRuntime,
 
-    /// Audit trail of executed plans
+    /// Accumulated audit records for all executed plans.
     audits: std.ArrayList(PlanAudit),
 
+    /// Create a new CommandPlanner attached to a TerminalRuntime.
+    ///
+    /// Parameters:
+    /// - `allocator`: Allocator for internal storage (audits, strings).
+    /// - `runtime`: Pointer to an initialized TerminalRuntime for key injection and snapshots.
+    ///
+    /// Returns: An initialized CommandPlanner ready to execute plans.
     pub fn init(allocator: std.mem.Allocator, runtime: *terminal_runtime.TerminalRuntime) CommandPlanner {
         return CommandPlanner{
             .allocator = allocator,
@@ -736,6 +893,7 @@ pub const CommandPlanner = struct {
         };
     }
 
+    /// Free all resources owned by this CommandPlanner, including all audit records.
     pub fn deinit(self: *CommandPlanner) void {
         for (self.audits.items) |*audit| {
             audit.deinit(self.allocator);
@@ -743,7 +901,22 @@ pub const CommandPlanner = struct {
         self.audits.deinit(self.allocator);
     }
 
-    /// Execute a declarative plan
+    /// Execute a declarative command plan and record an audit trail.
+    ///
+    /// This is the main entry point for plan execution. The method:
+    /// 1. Checks confirmation mode and paste policies
+    /// 2. Captures a before-snapshot of terminal state
+    /// 3. Builds the command string and injects it as keystrokes
+    /// 4. Captures an after-snapshot
+    /// 5. Compares output against expectations and failure signals
+    /// 6. Records a PlanAudit with the complete execution trace
+    ///
+    /// Parameters:
+    /// - `plan`: The CommandPlan to execute (not modified).
+    ///
+    /// Returns: The execution outcome (success, degraded, blocked, failed, or timeout).
+    ///
+    /// The audit is always recorded regardless of outcome. Access via `getAudits()`.
     pub fn executePlan(self: *CommandPlanner, plan: *const CommandPlan) !PlanOutcome {
         std.log.info("Executing plan: {s}", .{plan.plan_id});
 
@@ -898,9 +1071,17 @@ pub const CommandPlanner = struct {
         return audit.outcome;
     }
 
-    /// Execute plan with retry logic and exponential backoff
-    /// Retries on .failed outcome up to plan.retry_count times
-    /// Delay doubles each attempt: delay_ms * 2^attempt
+    /// Execute a plan with automatic retry on failure using exponential backoff.
+    ///
+    /// Calls `executePlan` and retries on `.failed` outcome up to `plan.retry_count` times.
+    /// Delay between retries starts at `plan.retry_delay_ms` and doubles each attempt.
+    ///
+    /// Parameters:
+    /// - `plan`: The CommandPlan to execute.
+    ///
+    /// Returns: Final outcome after all retry attempts (or first non-failed outcome).
+    ///
+    /// Note: Each attempt generates a separate audit record.
     pub fn executePlanWithRetry(self: *CommandPlanner, plan: *const CommandPlan) !PlanOutcome {
         var attempt: u8 = 0;
         var current_delay_ms = plan.retry_delay_ms;
@@ -926,8 +1107,15 @@ pub const CommandPlanner = struct {
         }
     }
 
-    /// Build full command string from plan
-    fn buildCommandString(self: *CommandPlanner, plan: *const CommandPlan) ![]const u8 {
+    /// Build the full command string from a plan's command, args, and environment.
+    ///
+    /// Constructs a shell-ready string: `ENV1=val1 ENV2=val2 command arg1 arg2 ...`
+    ///
+    /// Parameters:
+    /// - `plan`: The CommandPlan containing command, args, and env.
+    ///
+    /// Returns: Owned string that caller must free.
+    pub fn buildCommandString(self: *CommandPlanner, plan: *const CommandPlan) ![]const u8 {
         var parts: std.ArrayList(u8) = .{};
         defer parts.deinit(self.allocator);
 
@@ -977,8 +1165,18 @@ pub const CommandPlanner = struct {
         error_message: ?[]const u8 = null,
     };
 
-    /// Compare snapshot against expectations and failure signals
-    fn compareSnapshot(
+    /// Compare terminal snapshot against expectations and failure signals.
+    ///
+    /// Checks failure signals first (by severity: critical > err > warning),
+    /// then validates expectations. Returns appropriate outcome based on matches.
+    ///
+    /// Parameters:
+    /// - `snapshot_str`: Serialized snapshot JSON (currently unused, will use runtime snapshot).
+    /// - `expectations`: Patterns that must/must-not match for success.
+    /// - `failure_signals`: Patterns that indicate command failure.
+    ///
+    /// Returns: ComparisonResult with outcome and optional error message.
+    pub fn compareSnapshot(
         self: *CommandPlanner,
         snapshot_str: ?[]const u8,
         expectations: []const Expectation,
@@ -1097,11 +1295,20 @@ pub const CommandPlanner = struct {
         var snapshot = try self.runtime.snapshot(options);
         defer snapshot.deinit(self.allocator);
 
-        return try serializeSnapshotToJson(self.allocator, &snapshot);
+        return try serializeSnapshot(self.allocator, &snapshot);
     }
 
-    /// Serialize snapshot to JSON for audit trails
-    fn serializeSnapshotToJson(allocator: std.mem.Allocator, snapshot: *const terminal_runtime.Snapshot) ![]const u8 {
+    /// Serialize a terminal snapshot to JSON format for audit trails.
+    ///
+    /// Produces a compact JSON object containing hash, timestamp, dimensions,
+    /// cursor state, and content (up to 20 non-empty lines).
+    ///
+    /// Parameters:
+    /// - `allocator`: Allocator for output string.
+    /// - `snapshot`: Terminal snapshot to serialize.
+    ///
+    /// Returns: Owned JSON string that caller must free.
+    pub fn serializeSnapshot(allocator: std.mem.Allocator, snapshot: *const terminal_runtime.Snapshot) ![]const u8 {
         var content_buf: std.ArrayList(u8) = .{};
         defer content_buf.deinit(allocator);
 
@@ -1178,7 +1385,12 @@ pub const CommandPlanner = struct {
         return json_buf.toOwnedSlice(allocator);
     }
 
-    /// Get all audits
+    /// Get all accumulated audit records from executed plans.
+    ///
+    /// Returns: Slice of PlanAudit records in execution order.
+    ///
+    /// Note: The returned slice is valid until `deinit` is called on the planner.
+    /// Do not free individual audits; they are owned by the CommandPlanner.
     pub fn getAudits(self: *const CommandPlanner) []const PlanAudit {
         return self.audits.items;
     }
