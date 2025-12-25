@@ -20,6 +20,7 @@ pub const PlanArgs = struct {
     query: []const u8,
     context: ?[]const u8 = null,
     pretty: bool = false,
+    timeout_ms: u32 = 30000,
 };
 
 pub const Command = union(enum) {
@@ -142,6 +143,10 @@ pub fn parseArgs(allocator: std.mem.Allocator) !ParseResult {
 
                     if (plan_cmd.options.context) |ctx| {
                         plan_args.context = try allocator.dupe(u8, ctx);
+                    }
+
+                    if (args.options.timeout) |t| {
+                        plan_args.timeout_ms = t * 1000;
                     }
 
                     return ParseResult{

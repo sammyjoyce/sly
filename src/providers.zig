@@ -159,6 +159,8 @@ pub const Config = struct {
 
     ollama_model: []const u8 = "llama3.2",
     ollama_url: []const u8 = "http://localhost:11434",
+
+    timeout_ms: u32 = 30000,
 };
 
 fn anthropicPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8, user: []const u8) ![]u8 {
@@ -168,7 +170,7 @@ fn anthropicPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8
     defer alloc.free(u);
 
     return std.fmt.allocPrint(alloc,
-        \\{{"model":"{s}","max_tokens":256,"system":"{s}","messages":[{{"role":"user","content":"{s}"}}]}}
+        \\{{"model":"{s}","max_tokens":1024,"system":"{s}","messages":[{{"role":"user","content":"{s}"}}]}}
     , .{ model, s, u });
 }
 
@@ -233,7 +235,7 @@ pub fn query(
             const auth_header = try std.fmt.allocPrint(allocator, "x-api-key: {s}", .{cfg.anthropic_key.?});
             defer allocator.free(auth_header);
             const headers = [_][]const u8{ auth_header, "anthropic-version: 2023-06-01" };
-            break :blk try http.postJson(allocator, "https://api.anthropic.com/v1/messages", &headers, body);
+            break :blk try http.postJsonWithTimeout(allocator, "https://api.anthropic.com/v1/messages", &headers, body, cfg.timeout_ms);
         },
         .gemini => blk: {
             if (cfg.gemini_key == null) return error.MissingApiKey;
@@ -241,7 +243,7 @@ pub fn query(
             defer allocator.free(body);
             const url = try std.fmt.allocPrint(allocator, "https://generativelanguage.googleapis.com/v1beta/models/{s}:generateContent?key={s}", .{ cfg.gemini_model, cfg.gemini_key.? });
             defer allocator.free(url);
-            break :blk try http.postJson(allocator, url, &.{}, body);
+            break :blk try http.postJsonWithTimeout(allocator, url, &.{}, body, cfg.timeout_ms);
         },
         .openai => blk: {
             if (cfg.openai_key == null) return error.MissingApiKey;
@@ -249,14 +251,14 @@ pub fn query(
             defer allocator.free(body);
             const header = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{cfg.openai_key.?});
             defer allocator.free(header);
-            break :blk try http.postJson(allocator, cfg.openai_url, &.{header}, body);
+            break :blk try http.postJsonWithTimeout(allocator, cfg.openai_url, &.{header}, body, cfg.timeout_ms);
         },
         .ollama => blk: {
             const body = try ollamaPayload(allocator, cfg.ollama_model, system_prompt, query_text);
             defer allocator.free(body);
             const url = try std.fmt.allocPrint(allocator, "{s}/api/generate", .{cfg.ollama_url});
             defer allocator.free(url);
-            break :blk try http.postJson(allocator, url, &.{}, body);
+            break :blk try http.postJsonWithTimeout(allocator, url, &.{}, body, cfg.timeout_ms);
         },
         .echo => unreachable,
     };

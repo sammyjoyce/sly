@@ -1,6 +1,6 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 26)
+**Last Updated:** 2025-12-26 (Work Session 27)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
@@ -278,6 +278,32 @@ This document tracks detailed implementation status for integrating libghostty-v
 - **generatePlan()** - Provider query + schema validation with retries
 - **formatSnapshotForPrompt()** - Terminal state formatting for AI
 
+### Work Session 27 Updates (2025-12-26)
+
+**Bug Fixes:**
+- ✅ Fish shell timeout syntax fix: `{$timeout_val}s` → `"$timeout_val"s`
+- ✅ Fish timeout warning: Added one-time warning when timeout command unavailable
+- ✅ OSC parse error handling: Removed unused result variable, added proper OSC_COMMAND_INVALID handling
+
+**Serialization Improvements:**
+- ✅ CommandPlan toJson complete: Now properly serializes expectations and failure_signals arrays with all fields
+- ✅ Snapshot serialization: Implemented proper JSON with hash, timestamp, dimensions, cursor, and content summary
+
+**API Enhancements:**
+- ✅ PolicyEngine deinit: Added proper cleanup method interface
+- ✅ max_tokens increased: 256 → 1024 for complex command plans
+- ✅ --pretty flag: Plan command now supports pretty-printed JSON output
+- ✅ --timeout flag: Network timeout configurable via CLI (default 30s)
+- ✅ Terminal snapshot in direct query: Direct `sly "query"` now captures terminal snapshot
+
+**Shell Plugin UX:**
+- ✅ Unified spinner style: All shells now use consistent `/-\|` spinner
+- ✅ Empty query handling: All shell plugins silently clear buffer on empty queries
+
+**Verification:**
+- ✅ All 120+ tests passing
+- ✅ Build clean: `zig build -Doptimize=ReleaseSafe`
+
 ### Work Session 26 Updates (2025-12-26)
 
 **Provider Retry Logic:**
@@ -543,9 +569,27 @@ zig build test-ghostty   # Run libghostty integration tests
 - `specs/libghostty-design-decisions.md` - Design rationale
 - `specs/libghostty-implementation-plan.md` - Phase-by-phase plan
 
-## Current Status (Updated 2025-12-26 Work Session 26)
+## Current Status (Updated 2025-12-26 Work Session 27)
 
 **🎉 Major Achievement:** All core phases (0-7) are now **100% COMPLETE** with production fixes and terminal state enhancements!
+
+### Work Session 27 Highlights (Serialization, CLI Flags, UX Polish)
+
+**Bug Fixes & Serialization:**
+- ✅ Fish shell timeout syntax fixed
+- ✅ CommandPlan toJson complete with expectations/failure_signals
+- ✅ Snapshot serialization with full metadata
+- ✅ OSC parse error handling improved
+
+**CLI Enhancements:**
+- ✅ --pretty flag for formatted JSON output
+- ✅ --timeout flag for configurable network timeout
+- ✅ max_tokens increased to 1024
+
+**UX Improvements:**
+- ✅ Unified spinner style across all shells
+- ✅ Empty query handling in all plugins
+- ✅ Terminal snapshot in direct query mode
 
 ### Work Session 26 Highlights (Retry Logic, Blink, OSC 133, Alt Screen)
 

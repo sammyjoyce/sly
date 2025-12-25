@@ -588,9 +588,8 @@ pub const TerminalRuntime = struct {
                     // Intermediate bytes (0x20-0x2f) are collected but not used yet
                 },
                 .osc => {
-                    // Feed byte to OSC parser
-                    const result = ghostty.osc_next(self.osc_parser, byte);
-                    _ = result; // TODO: Handle parse errors
+                    // Feed byte to OSC parser (returns void; errors reported via osc_end)
+                    ghostty.osc_next(self.osc_parser, byte);
 
                     if (byte == 0x07 or byte == 0x1b) { // BEL or ESC (for ST)
                         // Check if this is ST (ESC \)
@@ -1073,6 +1072,11 @@ pub const TerminalRuntime = struct {
     /// This will be called by feedBytes in Phase 2 when OSC sequences are detected
     fn processOscCommand(self: *TerminalRuntime, command: ghostty.OscCommand) !void {
         const cmd_type = ghostty.osc_command_type(command);
+
+        if (cmd_type == ghostty.OSC_COMMAND_INVALID) {
+            std.log.debug("OSC parse error: invalid or unsupported OSC sequence", .{});
+            return;
+        }
 
         // Extract command-specific data for policy evaluation
         var payload: ?[]const u8 = null;

@@ -32,6 +32,13 @@ __sly_run_with_timeout() {
 __sly_expand() {
   # Only transform if line starts with "# "
   if [[ ${READLINE_LINE} == "# "* ]]; then
+    local q="${READLINE_LINE:2}"
+    # Empty query - just clear buffer and return
+    if [[ -z "${q// /}" ]]; then
+      READLINE_LINE=""
+      READLINE_POINT=0
+      return 0
+    fi
     # Ensure the 'sly' binary is available
     if ! command -v sly >/dev/null 2>&1; then
       if [[ "${SLY_COLOR:-1}" -eq 1 ]]; then

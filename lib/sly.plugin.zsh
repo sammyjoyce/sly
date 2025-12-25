@@ -69,18 +69,16 @@ _sly_exec() {
 
   # Spinner animation (can be disabled with SLY_SPINNER=0)
   if [[ "${SLY_SPINNER:-1}" -eq 1 ]]; then
-    local dots=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
-    local f=0
-    local saved="$BUFFER"
+    local spinner_chars='/-\|'
+    local i=0
     while kill -0 "$pid" 2>/dev/null; do
-      BUFFER="$saved ${dots[$((f % ${#dots[@]} + 1))]}"
-      zle redisplay
-      ((f++))
+      printf '\rGenerating... %s' "${spinner_chars:$((i % 4)):1}"
+      ((i++))
       sleep 0.1
     done
-  else
-    wait "$pid"
+    printf '\r%s\r' "                " # Clear the spinner line
   fi
+  wait "$pid" 2>/dev/null
 
   local plan_json rc
   plan_json="$(cat "$tmp")"; rc=$?
@@ -169,6 +167,12 @@ _sly_exec() {
 _sly_accept_line() {
   if [[ "$BUFFER" == "# "* && "$BUFFER" != *$'\n'* ]]; then
     local q="${BUFFER:2}"
+    # Empty query - just clear buffer and return
+    if [[ -z "${q// /}" ]]; then
+      BUFFER=""
+      zle reset-prompt
+      return 0
+    fi
     _sly_exec "$q"
   else
     zle .accept-line

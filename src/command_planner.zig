@@ -232,17 +232,46 @@ pub const CommandPlan = struct {
         self.failure_signals.deinit(allocator);
     }
 
-    /// Serialize CommandPlan to JSON string
+    /// Serialize CommandPlan to JSON string (compact or pretty-printed)
     pub fn toJson(self: CommandPlan, allocator: std.mem.Allocator) ![]const u8 {
+        return self.toJsonWithOptions(allocator, .{});
+    }
+
+    /// Options for JSON serialization
+    pub const JsonOptions = struct {
+        pretty: bool = false,
+    };
+
+    /// Serialize CommandPlan to JSON string with formatting options
+    pub fn toJsonWithOptions(self: CommandPlan, allocator: std.mem.Allocator, options: JsonOptions) ![]const u8 {
         var output = std.ArrayList(u8){};
         errdefer output.deinit(allocator);
 
+        const nl = if (options.pretty) "\n" else "";
+        const indent1 = if (options.pretty) "  " else "";
+        const indent2 = if (options.pretty) "    " else "";
+        const sp = if (options.pretty) " " else "";
+
         try output.append(allocator, '{');
-        try output.appendSlice(allocator, "\"plan_id\":\"");
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"plan_id\":");
+        try output.appendSlice(allocator, sp);
+        try output.append(allocator, '"');
         try output.appendSlice(allocator, self.plan_id);
-        try output.appendSlice(allocator, "\",\"command\":\"");
+        try output.appendSlice(allocator, "\",");
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"command\":");
+        try output.appendSlice(allocator, sp);
+        try output.append(allocator, '"');
         try output.appendSlice(allocator, self.command);
-        try output.appendSlice(allocator, "\",\"args\":[");
+        try output.appendSlice(allocator, "\",");
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"args\":");
+        try output.appendSlice(allocator, sp);
+        try output.append(allocator, '[');
 
         // Args array
         for (self.args, 0..) |arg, i| {
@@ -251,7 +280,12 @@ pub const CommandPlan = struct {
             try output.appendSlice(allocator, arg);
             try output.append(allocator, '"');
         }
-        try output.appendSlice(allocator, "],\"env\":{");
+        try output.appendSlice(allocator, "],");
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"env\":");
+        try output.appendSlice(allocator, sp);
+        try output.append(allocator, '{');
 
         // Env object
         var env_iter = self.env.iterator();
@@ -260,12 +294,18 @@ pub const CommandPlan = struct {
             if (!first_env) try output.append(allocator, ',');
             try output.append(allocator, '"');
             try output.appendSlice(allocator, entry.key_ptr.*);
-            try output.appendSlice(allocator, "\":\"");
+            try output.appendSlice(allocator, "\":");
+            try output.appendSlice(allocator, sp);
+            try output.append(allocator, '"');
             try output.appendSlice(allocator, entry.value_ptr.*);
             try output.append(allocator, '"');
             first_env = false;
         }
-        try output.appendSlice(allocator, "},\"stdin\":");
+        try output.appendSlice(allocator, "},");
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"stdin\":");
+        try output.appendSlice(allocator, sp);
 
         // Stdin
         if (self.stdin) |stdin| {
@@ -277,16 +317,103 @@ pub const CommandPlan = struct {
         }
 
         // Policies and modes
-        try output.appendSlice(allocator, ",\"paste_policy\":\"");
+        try output.append(allocator, ',');
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"paste_policy\":");
+        try output.appendSlice(allocator, sp);
+        try output.append(allocator, '"');
         try output.appendSlice(allocator, @tagName(self.paste_policy));
-        try output.appendSlice(allocator, "\",\"confirm_mode\":\"");
+        try output.appendSlice(allocator, "\",");
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"confirm_mode\":");
+        try output.appendSlice(allocator, sp);
+        try output.append(allocator, '"');
         try output.appendSlice(allocator, @tagName(self.confirm_mode));
-        try output.appendSlice(allocator, "\",\"expectations\":[],\"failure_signals\":[],\"created_at\":");
+        try output.appendSlice(allocator, "\",");
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"expectations\":");
+        try output.appendSlice(allocator, sp);
+        try output.append(allocator, '[');
+
+        for (self.expectations.items, 0..) |exp, i| {
+            if (i > 0) try output.append(allocator, ',');
+            try output.appendSlice(allocator, nl);
+            try output.appendSlice(allocator, indent2);
+            try output.appendSlice(allocator, "{\"pattern\":");
+            try output.appendSlice(allocator, sp);
+            try output.append(allocator, '"');
+            for (exp.pattern) |c| {
+                switch (c) {
+                    '"' => try output.appendSlice(allocator, "\\\""),
+                    '\\' => try output.appendSlice(allocator, "\\\\"),
+                    '\n' => try output.appendSlice(allocator, "\\n"),
+                    '\r' => try output.appendSlice(allocator, "\\r"),
+                    '\t' => try output.appendSlice(allocator, "\\t"),
+                    else => try output.append(allocator, c),
+                }
+            }
+            try output.appendSlice(allocator, "\",");
+            try output.appendSlice(allocator, sp);
+            try output.appendSlice(allocator, "\"must_match\":");
+            try output.appendSlice(allocator, sp);
+            try output.appendSlice(allocator, if (exp.must_match) "true" else "false");
+            try output.append(allocator, '}');
+        }
+
+        if (self.expectations.items.len > 0 and options.pretty) {
+            try output.appendSlice(allocator, nl);
+            try output.appendSlice(allocator, indent1);
+        }
+        try output.appendSlice(allocator, "],");
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"failure_signals\":");
+        try output.appendSlice(allocator, sp);
+        try output.append(allocator, '[');
+
+        for (self.failure_signals.items, 0..) |sig, i| {
+            if (i > 0) try output.append(allocator, ',');
+            try output.appendSlice(allocator, nl);
+            try output.appendSlice(allocator, indent2);
+            try output.appendSlice(allocator, "{\"pattern\":");
+            try output.appendSlice(allocator, sp);
+            try output.append(allocator, '"');
+            for (sig.pattern) |c| {
+                switch (c) {
+                    '"' => try output.appendSlice(allocator, "\\\""),
+                    '\\' => try output.appendSlice(allocator, "\\\\"),
+                    '\n' => try output.appendSlice(allocator, "\\n"),
+                    '\r' => try output.appendSlice(allocator, "\\r"),
+                    '\t' => try output.appendSlice(allocator, "\\t"),
+                    else => try output.append(allocator, c),
+                }
+            }
+            try output.appendSlice(allocator, "\",");
+            try output.appendSlice(allocator, sp);
+            try output.appendSlice(allocator, "\"exit_on_match\":");
+            try output.appendSlice(allocator, sp);
+            try output.appendSlice(allocator, if (sig.exit_on_match) "true" else "false");
+            try output.append(allocator, '}');
+        }
+
+        if (self.failure_signals.items.len > 0 and options.pretty) {
+            try output.appendSlice(allocator, nl);
+            try output.appendSlice(allocator, indent1);
+        }
+        try output.appendSlice(allocator, "],");
+        try output.appendSlice(allocator, nl);
+        try output.appendSlice(allocator, indent1);
+        try output.appendSlice(allocator, "\"created_at\":");
+        try output.appendSlice(allocator, sp);
 
         // Timestamp
         var buf: [32]u8 = undefined;
         const timestamp_str = try std.fmt.bufPrint(&buf, "{d}", .{self.created_at});
         try output.appendSlice(allocator, timestamp_str);
+        try output.appendSlice(allocator, nl);
         try output.append(allocator, '}');
 
         return output.toOwnedSlice(allocator);
@@ -603,25 +730,88 @@ pub const CommandPlanner = struct {
 
     /// Capture current terminal snapshot
     fn captureSnapshot(self: *CommandPlanner, options: terminal_runtime.SnapshotOptions) ![]const u8 {
-        // Call TerminalRuntime snapshot method
         var snapshot = try self.runtime.snapshot(options);
         defer snapshot.deinit(self.allocator);
 
-        // Serialize to string for audit trail
-        // TODO: Implement proper snapshot serialization once Snapshot has full data
-        const snapshot_str = try std.fmt.allocPrint(
-            self.allocator,
-            "Snapshot(hash={x}, timestamp={}, rows={}, cols={}, cursor={}:{})",
-            .{
-                snapshot.hash,
-                snapshot.timestamp,
-                snapshot.rows,
-                snapshot.cols,
-                snapshot.cursor_row,
-                snapshot.cursor_col,
-            },
-        );
-        return snapshot_str;
+        return try serializeSnapshotToJson(self.allocator, &snapshot);
+    }
+
+    /// Serialize snapshot to JSON for audit trails
+    fn serializeSnapshotToJson(allocator: std.mem.Allocator, snapshot: *const terminal_runtime.Snapshot) ![]const u8 {
+        var content_buf: std.ArrayList(u8) = .{};
+        defer content_buf.deinit(allocator);
+
+        var line_count: usize = 0;
+        const max_lines: usize = 20;
+
+        for (snapshot.framebuffer) |row| {
+            if (line_count >= max_lines) break;
+
+            var has_content = false;
+            for (row) |cell| {
+                if (cell.char != ' ' and cell.char != 0) {
+                    has_content = true;
+                    break;
+                }
+            }
+            if (!has_content) continue;
+
+            if (content_buf.items.len > 0) {
+                try content_buf.append(allocator, '\n');
+            }
+
+            for (row) |cell| {
+                if (cell.char != 0) {
+                    try content_buf.append(allocator, cell.char);
+                }
+            }
+            while (content_buf.items.len > 0 and content_buf.items[content_buf.items.len - 1] == ' ') {
+                _ = content_buf.pop();
+            }
+            line_count += 1;
+        }
+
+        var json_buf: std.ArrayList(u8) = .{};
+        errdefer json_buf.deinit(allocator);
+
+        const writer = json_buf.writer(allocator);
+        try writer.writeAll("{\"hash\":\"");
+        try std.fmt.format(writer, "{x}", .{snapshot.hash});
+        try writer.writeAll("\",\"timestamp\":");
+        try std.fmt.format(writer, "{}", .{snapshot.timestamp});
+        try writer.writeAll(",\"rows\":");
+        try std.fmt.format(writer, "{}", .{snapshot.rows});
+        try writer.writeAll(",\"cols\":");
+        try std.fmt.format(writer, "{}", .{snapshot.cols});
+        try writer.writeAll(",\"cursor\":{\"row\":");
+        try std.fmt.format(writer, "{}", .{snapshot.cursor_row});
+        try writer.writeAll(",\"col\":");
+        try std.fmt.format(writer, "{}", .{snapshot.cursor_col});
+        try writer.writeAll(",\"visible\":");
+        try writer.writeAll(if (snapshot.cursor_visible) "true" else "false");
+        try writer.writeAll("},\"content\":\"");
+
+        for (content_buf.items) |c| {
+            switch (c) {
+                '"' => try writer.writeAll("\\\""),
+                '\\' => try writer.writeAll("\\\\"),
+                '\n' => try writer.writeAll("\\n"),
+                '\r' => try writer.writeAll("\\r"),
+                '\t' => try writer.writeAll("\\t"),
+                else => {
+                    if (c >= 0x20 and c < 0x7F) {
+                        try writer.writeByte(c);
+                    } else {
+                        try std.fmt.format(writer, "\\u{x:0>4}", .{c});
+                    }
+                },
+            }
+        }
+        try writer.writeAll("\",\"lines\":");
+        try std.fmt.format(writer, "{}", .{line_count});
+        try writer.writeAll("}");
+
+        return json_buf.toOwnedSlice(allocator);
     }
 
     /// Get all audits

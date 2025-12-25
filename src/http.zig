@@ -35,6 +35,16 @@ pub fn postJson(
     headers: []const []const u8,
     body: []const u8,
 ) !Response {
+    return postJsonWithTimeout(allocator, url, headers, body, 30000);
+}
+
+pub fn postJsonWithTimeout(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    headers: []const []const u8,
+    body: []const u8,
+    timeout_ms: u32,
+) !Response {
     var out: std.ArrayList(u8) = .{};
     errdefer out.deinit(allocator);
 
@@ -60,8 +70,9 @@ pub fn postJson(
     _ = c.curl_easy_setopt(eh, c.CURLOPT_HTTPHEADER, list);
 
     // Set timeouts
-    _ = c.curl_easy_setopt(eh, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, 5000));
-    _ = c.curl_easy_setopt(eh, c.CURLOPT_TIMEOUT_MS, @as(c_long, 15000));
+    const connect_timeout = @min(timeout_ms / 2, 10000);
+    _ = c.curl_easy_setopt(eh, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(connect_timeout)));
+    _ = c.curl_easy_setopt(eh, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(timeout_ms)));
 
     // Set write callback
     var ctx = WriteCtx{ .buf = &out, .allocator = allocator };

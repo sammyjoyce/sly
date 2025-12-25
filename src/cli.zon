@@ -1,6 +1,14 @@
 .{
     .name = "sly",
     .description = "Shell AI command generator - convert natural language to shell commands",
+    .options = .{
+        .{
+            .short = 't',
+            .long = "timeout",
+            .type = "?u32",
+            .description = "Network timeout in seconds (default: 30)",
+        },
+    },
     .flags = .{
         .{
             .short = 'v',

@@ -16,7 +16,17 @@ function __sly_run_with_timeout
     else if command -v gtimeout >/dev/null 2>&1
         gtimeout $timeout_secs $argv
     else
-        # No timeout available, run directly
+        # No timeout available, run directly (warn once)
+        if not set -q __SLY_TIMEOUT_WARNED
+            if test "$SLY_COLOR" != "0"
+                set_color yellow
+                echo "⚠ sly: timeout command not found, running without timeout" >&2
+                set_color normal
+            else
+                echo "sly: timeout command not found, running without timeout" >&2
+            end
+            set -g __SLY_TIMEOUT_WARNED 1
+        end
         $argv
     end
 end
@@ -45,6 +55,12 @@ function __sly_expand
     
     # Extract query (remove "# " prefix)
     set -l query (string sub -s 3 -- $current_buffer)
+    
+    # Empty query - just clear buffer and return
+    if test -z (string trim -- "$query")
+        commandline -r ""
+        return
+    end
     
     # Capture context from history
     set -l context ""
@@ -85,14 +101,14 @@ function __sly_expand
     end
     
     if test "$spinner_enabled" != "0"
-        set -l dots "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"
+        set -l spinner_chars "/" "-" "\\" "|"
         set -l i 1
         while kill -0 $pid 2>/dev/null
-            printf '\rGenerating... %s' $dots[$i]
-            set i (math "($i % 10) + 1")
+            printf '\rGenerating... %s' $spinner_chars[$i]
+            set i (math "($i % 4) + 1")
             sleep 0.1
         end
-        printf '\r%s\r' "                  "
+        printf '\r%s\r' "                "
     end
     
     # Wait for background job and get exit status
@@ -105,10 +121,10 @@ function __sly_expand
     if test $rc -eq 124
         if test "$SLY_COLOR" != "0"
             set_color red
-            echo "❌ Generation timed out after {$timeout_val}s"
+            echo "❌ Generation timed out after "$timeout_val"s"
             set_color normal
         else
-            echo "Generation timed out after {$timeout_val}s"
+            echo "Generation timed out after "$timeout_val"s"
         end
         commandline -r ""
         return

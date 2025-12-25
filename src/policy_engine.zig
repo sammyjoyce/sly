@@ -135,6 +135,10 @@ pub const PolicyEngine = struct {
         };
     }
 
+    pub fn deinit(self: *PolicyEngine) void {
+        _ = self;
+    }
+
     /// Evaluate policy for an OSC command
     pub fn evaluateOsc(self: *PolicyEngine, command_type: ghostty.OscCommandType, payload: ?[]const u8) !PolicyDecision {
         self.stats.total_osc_evaluations += 1;

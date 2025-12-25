@@ -104,8 +104,9 @@ fn showHelp() !void {
         \\  sly feedbytes [--input "text"] [--snapshot] [--raw]
         \\
         \\Options:
-        \\  -h, --help     Show this help message
-        \\  -v, --version  Show version information
+        \\  -h, --help           Show this help message
+        \\  -v, --version        Show version information
+        \\  -t, --timeout <sec>  Network timeout in seconds (default: 30)
         \\
         \\Commands:
         \\  shell install              Install shell integration
@@ -380,8 +381,10 @@ fn planCommand(alloc: std.mem.Allocator, plan_args: cli.PlanArgs) !void {
     var stdout_writer = stdout_file.writer(&stdout_buf);
 
     // Load configuration from environment
-    const cfg = try sly.loadConfigFromEnv(alloc);
+    var cfg = try sly.loadConfigFromEnv(alloc);
     defer sly.freeConfig(alloc, cfg);
+
+    cfg.timeout_ms = plan_args.timeout_ms;
 
     // Create snapshot from context if provided
     var snapshot_opt: ?sly.terminal_runtime.Snapshot = null;
@@ -413,7 +416,7 @@ fn planCommand(alloc: std.mem.Allocator, plan_args: cli.PlanArgs) !void {
     defer plan.deinit(alloc);
 
     // Convert CommandPlan back to JSON for output
-    const json_str = try plan.toJson(alloc);
+    const json_str = try plan.toJsonWithOptions(alloc, .{ .pretty = plan_args.pretty });
     defer alloc.free(json_str);
 
     // Output the JSON
@@ -441,9 +444,32 @@ pub fn main() !void {
             const cfg = try sly.loadConfigFromEnv(alloc);
             defer sly.freeConfig(alloc, cfg);
 
+            // Create snapshot from SLY_CONTEXT environment variable if provided
+            var snapshot_opt: ?sly.terminal_runtime.Snapshot = null;
+            var runtime_opt: ?sly.terminal_runtime.TerminalRuntime = null;
+            defer {
+                if (snapshot_opt) |*snap| snap.deinit(alloc);
+                if (runtime_opt) |*rt| rt.shutdown();
+            }
+
+            if (std.process.getEnvVarOwned(alloc, "SLY_CONTEXT") catch null) |context| {
+                defer alloc.free(context);
+
+                const init_params = sly.terminal_runtime.InitParams{
+                    .cols = 80,
+                    .rows = 24,
+                };
+                var runtime = try sly.terminal_runtime.TerminalRuntime.init(alloc, init_params);
+
+                try runtime.feedBytes(context);
+
+                const snapshot_opts = sly.terminal_runtime.SnapshotOptions{};
+                snapshot_opt = try runtime.snapshot(snapshot_opts);
+                runtime_opt = runtime;
+            }
+
             // Generate the command
-            // TODO: Pass terminal snapshot when running in interactive mode
-            const out_cmd = try sly.generate(alloc, query_text, cfg, null);
+            const out_cmd = try sly.generate(alloc, query_text, cfg, if (snapshot_opt) |*snap| snap else null);
             defer alloc.free(out_cmd);
 
             // Output the result
