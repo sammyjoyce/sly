@@ -3,7 +3,6 @@
 # Optional: Enter auto-expand for lines starting with "# " when SLY_BASH_ENTER=1
 # Type:   # your request
 # Then:   press Ctrl-x a   -> buffer is replaced with the command
-# Uses CommandPlan JSON schema for enhanced safety and metadata.
 
 __bash_ai_expand() {
   # Only transform if line starts with "# "
@@ -14,65 +13,58 @@ __bash_ai_expand() {
       return 0
     fi
     local q="${READLINE_LINE:2}"
-    local plan_json
-    plan_json="$(sly "$q" 2>/dev/null)"
+    local plan_json cmd
+    
+    # Capture recent terminal output for context
+    # In bash, we can capture recent history to provide AI with context
+    local context=""
+    
+    # Capture last 10 history entries which may contain relevant context
+    if command -v history >/dev/null 2>&1; then
+      context="$(history 10 2>/dev/null | tail -20 || true)"
+    fi
+    
+    # If we have a populated READLINE_LINE, add that as additional context
+    if [[ -n "$READLINE_LINE" ]]; then
+      context="${context}${context:+$'\n'}Current buffer: $READLINE_LINE"
+    fi
+    
+    # Call sly plan with context if available
+    if [[ -n "$context" ]]; then
+      plan_json="$(sly plan --query "$q" --context "$context" 2>/dev/null)"
+    else
+      plan_json="$(sly plan --query "$q" 2>/dev/null)"
+    fi
+    
     if [[ -n "$plan_json" && "$plan_json" != Error:* && "$plan_json" != API\ Error:* ]]; then
-      # Parse CommandPlan JSON to extract command and args
-      # Use jq if available, otherwise fall back to basic parsing
-      if command -v jq &>/dev/null; then
-        local cmd_base args_array full_cmd
-        cmd_base="$(echo "$plan_json" | jq -r '.command')"
-        args_array="$(echo "$plan_json" | jq -r '.args[]? // empty')"
-        
-        # Build full command with args
-        full_cmd="$cmd_base"
-        if [[ -n "$args_array" ]]; then
-          # Properly quote arguments that contain spaces or special characters
-          while IFS= read -r arg; do
-            # Check if arg needs quoting
-            if [[ "$arg" =~ [[:space:]\$\"\'\`\!] ]]; then
-              full_cmd="$full_cmd \"${arg//\"/\\\"}\""
-            else
-              full_cmd="$full_cmd $arg"
-            fi
-          done <<< "$args_array"
+      # Parse JSON to extract command and args
+      # Use jq if available, otherwise fall back to simple grep/sed extraction
+      if command -v jq >/dev/null 2>&1; then
+        # Parse with jq for robust JSON parsing
+        cmd="$(echo "$plan_json" | jq -r '[.command, (.args // [])[]] | join(" ")' 2>/dev/null)"
+      else
+        # Fallback: simple extraction (less robust but no dependencies)
+        # Extract "command": "value" and "args": ["a", "b"]
+        local base_cmd args_str
+        base_cmd="$(echo "$plan_json" | grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')"
+        args_str="$(echo "$plan_json" | grep -o '"args"[[:space:]]*:[[:space:]]*\[[^]]*\]' | sed 's/.*"args"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/' | sed 's/"//g' | sed 's/,/ /g')"
+        if [[ -n "$args_str" ]]; then
+          cmd="$base_cmd $args_str"
+        else
+          cmd="$base_cmd"
         fi
-        
-        # Extract metadata for display (optional: show warnings/confirmations)
-        local confirm_mode paste_policy
-        confirm_mode="$(echo "$plan_json" | jq -r '.confirm_mode')"
-        paste_policy="$(echo "$plan_json" | jq -r '.paste_policy')"
-        
-        # Show warning for dangerous commands
-        if [[ "$confirm_mode" == "preview" || "$paste_policy" == "needs_confirm" ]]; then
-          printf '\e[33m%s\e[0m\n' "⚠ This command requires confirmation"
-        fi
-        
-        READLINE_LINE="$full_cmd"
+      fi
+      
+      if [[ -n "$cmd" ]]; then
+        READLINE_LINE="$cmd"
         READLINE_POINT=${#READLINE_LINE}
       else
-        # Fallback: basic JSON parsing without jq
-        # Extract command field: "command":"value"
-        local cmd_base="${plan_json#*\"command\":\"}"
-        cmd_base="${cmd_base%%\"*}"
-        
-        # Extract args array (basic approach)
-        local args_part="${plan_json#*\"args\":\[}"
-        args_part="${args_part%%\]*}"
-        
-        # Build command with args
-        READLINE_LINE="$cmd_base"
-        if [[ -n "$args_part" && "$args_part" != "null" ]]; then
-          # Remove quotes and commas, split on remaining delimiters
-          args_part="${args_part//\"/}"
-          args_part="${args_part//,/ }"
-          READLINE_LINE="$cmd_base $args_part"
-        fi
-        
-        READLINE_POINT=${#READLINE_LINE}
+        printf '\e[31m%s\e[0m\n' "Failed to parse command from plan"
+        READLINE_LINE=""
+        READLINE_POINT=0
       fi
     else
-      printf '\e[31m%s\e[0m\n' "Failed to generate command"
+      printf '\e[31m%s\e[0m\n' "Failed to generate command plan"
       [[ -n "$plan_json" ]] && printf '\e[31m%s\e[0m\n' "$plan_json"
       READLINE_LINE=""
       READLINE_POINT=0
