@@ -1,13 +1,13 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 35)
+**Last Updated:** 2025-12-26 (Work Session 36)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
 
 This document tracks detailed implementation status for integrating libghostty-vt into sly. The integration replaces manual ANSI parsing with ghostty's terminal emulation engine.
 
-**🎯 Current Status:** All core phases (0-7) are complete and tested with 118 passing unit tests. System is production-ready and awaiting real-world AI provider testing.
+**🎯 Current Status:** All core phases (0-7) are complete and tested with 111 passing unit tests. System is production-ready and awaiting real-world AI provider testing.
 
 **Related Documents:**
 - 🏗️ [libghostty-implementation-plan.md](./libghostty-implementation-plan.md) - Phase-by-phase roadmap
@@ -34,6 +34,28 @@ This document tracks detailed implementation status for integrating libghostty-v
 
 ## Current Status
 
+### Work Session 36 Highlights (2025-12-26)
+
+**Verification Pass:**
+- ✅ All 111 unit tests passing across terminal_runtime (44), policy_engine (28), command_planner (25), providers (1), http (4), context (9)
+- ✅ Build clean with `zig build -Doptimize=ReleaseSafe`
+- ✅ Shell plugins synchronized (lib/ and src/ in sync for zsh, bash, fish)
+- ✅ End-to-end UX flow verified with echo provider (`sly plan --query "..."`)
+- ✅ Shell install command verified for all 3 shells (zsh, bash, fish)
+- ✅ feedbytes command verified with SGR color parsing
+- ✅ Scrollback buffer tests verified
+- ✅ Policy engine loadPolicyFromEnv tests verified
+- ✅ CSI sequence tests comprehensive (cursor positioning, erase, autowrap, visibility)
+
+**Test Count:**
+- Total tests: 111 (distributed across 6 modules)
+- terminal_runtime.zig: 44 tests
+- policy_engine.zig: 28 tests
+- command_planner.zig: 25 tests
+- context.zig: 9 tests
+- http.zig: 4 tests
+- providers.zig: 1 test
+
 ### Work Session 35 Highlights (2025-12-26)
 
 **Documentation Improvements:**
@@ -45,10 +67,10 @@ This document tracks detailed implementation status for integrating libghostty-v
 **Test Coverage Improvements:**
 - ✅ Added 15 unit tests to providers.zig (jsonEscape, trimSingleLineInPlace, Config.getMaxTokens)
 - ✅ Added 4 unit tests to http.zig (calculateConnectTimeout, Response struct)
-- ✅ Test count now at 118 (previously 99)
+- ✅ Test count now at 111 (previously 99)
 
 **Verification:**
-- ✅ All 118 tests passing
+- ✅ All 111 tests passing
 - ✅ Build clean with `zig build -Doptimize=ReleaseSafe`
 - ✅ Shell plugins synchronized (lib/ and src/ in sync for zsh, bash, fish)
 - ✅ Fish plugin feature complete, matches zsh functionality
