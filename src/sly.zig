@@ -23,6 +23,7 @@ pub const PlanOutcome = command_planner.PlanOutcome;
 // Shell integration scripts embedded at compile time
 pub const zsh_plugin = @embedFile("sly.plugin.zsh");
 pub const bash_plugin = @embedFile("bash-sly.plugin.sh");
+pub const fish_plugin = @embedFile("sly.plugin.fish");
 
 /// Parse a provider name string into a Provider enum.
 /// Returns .anthropic as the default for unknown provider names.
@@ -439,12 +440,14 @@ pub fn generatePlan(
 pub const ShellType = enum {
     bash,
     zsh,
+    fish,
     unknown,
 
     pub fn fromString(s: []const u8) ShellType {
         const basename = std.fs.path.basename(s);
         if (std.mem.eql(u8, basename, "zsh")) return .zsh;
         if (std.mem.eql(u8, basename, "bash")) return .bash;
+        if (std.mem.eql(u8, basename, "fish")) return .fish;
         return .unknown;
     }
 
@@ -452,6 +455,7 @@ pub const ShellType = enum {
         return switch (self) {
             .bash => "bash",
             .zsh => "zsh",
+            .fish => "fish",
             .unknown => "unknown",
         };
     }
@@ -460,6 +464,7 @@ pub const ShellType = enum {
         return switch (self) {
             .bash => ".bashrc",
             .zsh => ".zshrc",
+            .fish => ".config/fish/config.fish",
             .unknown => "",
         };
     }
@@ -468,6 +473,7 @@ pub const ShellType = enum {
         return switch (self) {
             .bash => bash_plugin,
             .zsh => zsh_plugin,
+            .fish => fish_plugin,
             .unknown => "",
         };
     }
@@ -501,6 +507,7 @@ pub fn installShellIntegration(allocator: std.mem.Allocator, shell: ShellType, a
     const plugin_filename = switch (shell) {
         .bash => "sly.plugin.sh",
         .zsh => "sly.plugin.zsh",
+        .fish => "sly.plugin.fish",
         .unknown => unreachable,
     };
 

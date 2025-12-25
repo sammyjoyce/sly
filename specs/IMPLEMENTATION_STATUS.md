@@ -1,13 +1,13 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 24)
+**Last Updated:** 2025-12-26 (Work Session 25)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
 
 This document tracks detailed implementation status for integrating libghostty-vt into sly. The integration replaces manual ANSI parsing with ghostty's terminal emulation engine.
 
-**🎯 Current Status:** All core phases (0-7) are complete and tested with 115+ passing unit tests. System is production-ready and awaiting real-world AI provider testing.
+**🎯 Current Status:** All core phases (0-7) are complete and tested with 120+ passing unit tests. System is production-ready and awaiting real-world AI provider testing.
 
 **Related Documents:**
 - 🏗️ [libghostty-implementation-plan.md](./libghostty-implementation-plan.md) - Phase-by-phase roadmap
@@ -278,6 +278,35 @@ This document tracks detailed implementation status for integrating libghostty-v
 - **generatePlan()** - Provider query + schema validation with retries
 - **formatSnapshotForPrompt()** - Terminal state formatting for AI
 
+### Work Session 25 Updates (2025-12-26)
+
+**CSI Cursor Movement Commands (A/B/C/D):**
+- ✅ Added processCursorUp() for CSI A (move cursor up N rows)
+- ✅ Added processCursorDown() for CSI B (move cursor down N rows)
+- ✅ Added processCursorForward() for CSI C (move cursor right N columns)
+- ✅ Added processCursorBack() for CSI D (move cursor left N columns)
+- ✅ All cursor movements clamp to terminal boundaries
+- ✅ Tests added for all four cursor movement directions
+
+**SGR Support for Faint, Inverse, Strikethrough:**
+- ✅ Added faint, inverse, strikethrough fields to Cell struct
+- ✅ Added SGR_ATTR_FAINT handling (code 2)
+- ✅ Added SGR_ATTR_INVERSE and SGR_ATTR_RESET_INVERSE handling (codes 7/27)
+- ✅ Added SGR_ATTR_STRIKETHROUGH and SGR_ATTR_RESET_STRIKETHROUGH handling (codes 9/29)
+- ✅ Updated computeHash() to include new attributes
+- ✅ Updated addChar() to copy all style attributes
+- ✅ Added libghostty.zig exports for strikethrough
+- ✅ Test added to verify all new SGR attributes
+
+**Fish Shell Plugin Support:**
+- ✅ Created lib/sly.plugin.fish with full Fish shell integration
+- ✅ Created src/sly.plugin.fish for embedding
+- ✅ Added fish variant to ShellType enum in sly.zig
+- ✅ Updated fromString(), toString(), rcFile(), pluginContent()
+- ✅ Updated installShellIntegration() to support fish
+- ✅ Updated main.zig install handler and help text
+- ✅ Fish plugin features: timeout support, jq/fallback parsing, history context, Enter key binding
+
 ### Work Session 24 Updates (2025-12-26)
 
 **Policy Engine Enhancements:**
@@ -477,9 +506,26 @@ zig build test-ghostty   # Run libghostty integration tests
 - `specs/libghostty-design-decisions.md` - Design rationale
 - `specs/libghostty-implementation-plan.md` - Phase-by-phase plan
 
-## Current Status (Updated 2025-12-26 Work Session 23)
+## Current Status (Updated 2025-12-26 Work Session 25)
 
 **🎉 Major Achievement:** All core phases (0-7) are now **100% COMPLETE** with production fixes and terminal state enhancements!
+
+### Work Session 25 Highlights (Cursor Movement, SGR Extensions, Fish Support)
+
+**CSI Cursor Movement (A/B/C/D):**
+- ✅ Full implementation of cursor up/down/forward/back commands
+- ✅ All movements properly clamp to terminal boundaries
+- ✅ 4 new tests for cursor movement
+
+**SGR Extensions:**
+- ✅ Faint (code 2), Inverse (7/27), Strikethrough (9/29) support
+- ✅ Cell struct updated with new attribute fields
+- ✅ computeHash() and addChar() updated for new attributes
+
+**Fish Shell Support:**
+- ✅ Complete Fish shell plugin (lib/sly.plugin.fish)
+- ✅ ShellType enum extended with fish variant
+- ✅ Full install integration for fish
 
 ### Work Session 23 Highlights (Shell Plugins & Scrollback)
 
@@ -532,11 +578,11 @@ zig build test-ghostty   # Run libghostty integration tests
 - ✅ Phase 3: Input synthesis with paste safety and key encoding
 - ✅ Phase 4: Policy engine with comprehensive OSC routing
 - ✅ Phase 5: Command planner with snapshot comparison and pattern matching
-- ✅ Phase 6: Shell integration with CommandPlan JSON parsing, env var config (zsh + bash)
+- ✅ Phase 6: Shell integration with CommandPlan JSON parsing, env var config (zsh + bash + fish)
 - ✅ Phase 7: Provider integration with context enrichment + schema validation + production fixes
 
 **Test Results:**
-- ✅ 115+ unit tests passing (terminal_runtime, policy_engine, command_planner)
+- ✅ 120+ unit tests passing (terminal_runtime, policy_engine, command_planner)
 - ✅ Build system fully functional (Nix + Zig 0.15.2)
 - ✅ End-to-end pipeline verified with echo provider
 - ✅ `sly plan` command working correctly

@@ -67,8 +67,11 @@ pub const Cell = struct {
     fg_color: Color = .none,
     bg_color: Color = .none,
     bold: bool = false,
+    faint: bool = false,
     italic: bool = false,
     underline: ghostty.SgrUnderline = 0, // GHOSTTY_SGR_UNDERLINE_NONE
+    inverse: bool = false,
+    strikethrough: bool = false,
 };
 
 /// Color representation supporting 8-color, 256-color, and RGB
@@ -537,6 +540,22 @@ pub const TerminalRuntime = struct {
                                 // CHA (Cursor Horizontal Absolute)
                                 self.processCursorColumn(params_slice);
                             },
+                            'A' => {
+                                // CUU (Cursor Up)
+                                self.processCursorUp(params_slice);
+                            },
+                            'B' => {
+                                // CUD (Cursor Down)
+                                self.processCursorDown(params_slice);
+                            },
+                            'C' => {
+                                // CUF (Cursor Forward/Right)
+                                self.processCursorForward(params_slice);
+                            },
+                            'D' => {
+                                // CUB (Cursor Back/Left)
+                                self.processCursorBack(params_slice);
+                            },
                             else => {},
                         }
                         state = .normal;
@@ -621,8 +640,11 @@ pub const TerminalRuntime = struct {
             .fg_color = self.current_style.fg_color,
             .bg_color = self.current_style.bg_color,
             .bold = self.current_style.bold,
+            .faint = self.current_style.faint,
             .italic = self.current_style.italic,
             .underline = self.current_style.underline,
+            .inverse = self.current_style.inverse,
+            .strikethrough = self.current_style.strikethrough,
         };
 
         // Advance cursor
@@ -672,6 +694,60 @@ pub const TerminalRuntime = struct {
 
         // Convert to 0-indexed and clamp
         self.cursor_col = if (col > 0) @min(col - 1, self.cols - 1) else 0;
+    }
+
+    /// Process CSI A (CUU - Cursor Up)
+    fn processCursorUp(self: *TerminalRuntime, params: []const u8) void {
+        var n: u16 = 1;
+        if (params.len > 0) {
+            n = std.fmt.parseInt(u16, params, 10) catch 1;
+        }
+        if (n == 0) n = 1;
+
+        if (self.cursor_row >= n) {
+            self.cursor_row -= n;
+        } else {
+            self.cursor_row = 0;
+        }
+    }
+
+    /// Process CSI B (CUD - Cursor Down)
+    fn processCursorDown(self: *TerminalRuntime, params: []const u8) void {
+        var n: u16 = 1;
+        if (params.len > 0) {
+            n = std.fmt.parseInt(u16, params, 10) catch 1;
+        }
+        if (n == 0) n = 1;
+
+        const new_row = self.cursor_row + n;
+        self.cursor_row = @min(new_row, self.rows - 1);
+    }
+
+    /// Process CSI C (CUF - Cursor Forward/Right)
+    fn processCursorForward(self: *TerminalRuntime, params: []const u8) void {
+        var n: u16 = 1;
+        if (params.len > 0) {
+            n = std.fmt.parseInt(u16, params, 10) catch 1;
+        }
+        if (n == 0) n = 1;
+
+        const new_col = self.cursor_col + n;
+        self.cursor_col = @min(new_col, self.cols - 1);
+    }
+
+    /// Process CSI D (CUB - Cursor Back/Left)
+    fn processCursorBack(self: *TerminalRuntime, params: []const u8) void {
+        var n: u16 = 1;
+        if (params.len > 0) {
+            n = std.fmt.parseInt(u16, params, 10) catch 1;
+        }
+        if (n == 0) n = 1;
+
+        if (self.cursor_col >= n) {
+            self.cursor_col -= n;
+        } else {
+            self.cursor_col = 0;
+        }
     }
 
     /// Process CSI J (ED - Erase in Display)
@@ -832,6 +908,9 @@ pub const TerminalRuntime = struct {
                 ghostty.SGR_ATTR_RESET_BOLD => {
                     self.current_style.bold = false;
                 },
+                ghostty.SGR_ATTR_FAINT => {
+                    self.current_style.faint = true;
+                },
                 ghostty.SGR_ATTR_ITALIC => {
                     self.current_style.italic = true;
                 },
@@ -843,6 +922,18 @@ pub const TerminalRuntime = struct {
                 },
                 ghostty.SGR_ATTR_RESET_UNDERLINE => {
                     self.current_style.underline = ghostty.SGR_UNDERLINE_NONE;
+                },
+                ghostty.SGR_ATTR_INVERSE => {
+                    self.current_style.inverse = true;
+                },
+                ghostty.SGR_ATTR_RESET_INVERSE => {
+                    self.current_style.inverse = false;
+                },
+                ghostty.SGR_ATTR_STRIKETHROUGH => {
+                    self.current_style.strikethrough = true;
+                },
+                ghostty.SGR_ATTR_RESET_STRIKETHROUGH => {
+                    self.current_style.strikethrough = false;
                 },
                 ghostty.SGR_ATTR_FG_8 => {
                     self.current_style.fg_color = .{ .indexed = attr.value.fg_8 };
@@ -1143,10 +1234,13 @@ pub const TerminalRuntime = struct {
                 hashColor(&hasher, cell.fg_color);
                 hashColor(&hasher, cell.bg_color);
                 hasher.update(&[_]u8{@intFromBool(cell.bold)});
+                hasher.update(&[_]u8{@intFromBool(cell.faint)});
                 hasher.update(&[_]u8{@intFromBool(cell.italic)});
                 // underline is c_uint, truncate to u8 for hashing
                 const underline_val: u8 = @truncate(cell.underline);
                 hasher.update(&[_]u8{underline_val});
+                hasher.update(&[_]u8{@intFromBool(cell.inverse)});
+                hasher.update(&[_]u8{@intFromBool(cell.strikethrough)});
             }
         }
 
@@ -1931,4 +2025,118 @@ test "CSI G cursor horizontal absolute" {
 
     try runtime.feedBytes("\x1b[10G"); // Move to col 10
     try testing.expectEqual(@as(u16, 9), runtime.cursor_col);
+}
+
+test "CSI A cursor up" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer runtime.shutdown();
+
+    // Move to row 10
+    try runtime.feedBytes("\x1b[10;1H");
+    try testing.expectEqual(@as(u16, 9), runtime.cursor_row);
+
+    // Move up 3 rows
+    try runtime.feedBytes("\x1b[3A");
+    try testing.expectEqual(@as(u16, 6), runtime.cursor_row);
+
+    // Default is 1
+    try runtime.feedBytes("\x1b[A");
+    try testing.expectEqual(@as(u16, 5), runtime.cursor_row);
+
+    // Clamp at top
+    try runtime.feedBytes("\x1b[100A");
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_row);
+}
+
+test "CSI B cursor down" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer runtime.shutdown();
+
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_row);
+
+    // Move down 5 rows
+    try runtime.feedBytes("\x1b[5B");
+    try testing.expectEqual(@as(u16, 5), runtime.cursor_row);
+
+    // Default is 1
+    try runtime.feedBytes("\x1b[B");
+    try testing.expectEqual(@as(u16, 6), runtime.cursor_row);
+
+    // Clamp at bottom
+    try runtime.feedBytes("\x1b[100B");
+    try testing.expectEqual(@as(u16, 23), runtime.cursor_row);
+}
+
+test "CSI C cursor forward" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer runtime.shutdown();
+
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_col);
+
+    // Move forward 10 columns
+    try runtime.feedBytes("\x1b[10C");
+    try testing.expectEqual(@as(u16, 10), runtime.cursor_col);
+
+    // Default is 1
+    try runtime.feedBytes("\x1b[C");
+    try testing.expectEqual(@as(u16, 11), runtime.cursor_col);
+
+    // Clamp at right
+    try runtime.feedBytes("\x1b[100C");
+    try testing.expectEqual(@as(u16, 79), runtime.cursor_col);
+}
+
+test "CSI D cursor back" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer runtime.shutdown();
+
+    // Start at column 20
+    try runtime.feedBytes("\x1b[20G");
+    try testing.expectEqual(@as(u16, 19), runtime.cursor_col);
+
+    // Move back 5 columns
+    try runtime.feedBytes("\x1b[5D");
+    try testing.expectEqual(@as(u16, 14), runtime.cursor_col);
+
+    // Default is 1
+    try runtime.feedBytes("\x1b[D");
+    try testing.expectEqual(@as(u16, 13), runtime.cursor_col);
+
+    // Clamp at left
+    try runtime.feedBytes("\x1b[100D");
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_col);
+}
+
+test "SGR faint, inverse, strikethrough" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // Test faint (code 2)
+    try runtime.feedBytes("\x1b[2mF");
+    try testing.expect(runtime.framebuffer.items[0].items[0].faint);
+
+    // Test inverse (code 7)
+    try runtime.feedBytes("\x1b[7mI");
+    try testing.expect(runtime.framebuffer.items[0].items[1].inverse);
+    try testing.expect(runtime.framebuffer.items[0].items[1].faint); // Still faint
+
+    // Test strikethrough (code 9)
+    try runtime.feedBytes("\x1b[9mS");
+    try testing.expect(runtime.framebuffer.items[0].items[2].strikethrough);
+
+    // Reset all
+    try runtime.feedBytes("\x1b[0mN");
+    try testing.expect(!runtime.framebuffer.items[0].items[3].faint);
+    try testing.expect(!runtime.framebuffer.items[0].items[3].inverse);
+    try testing.expect(!runtime.framebuffer.items[0].items[3].strikethrough);
 }

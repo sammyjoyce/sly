@@ -15,6 +15,8 @@ fn installShellCommand(alloc: std.mem.Allocator, install_args: cli.ShellInstallA
             requested_shell = .bash;
         } else if (std.mem.eql(u8, shell_str, "zsh")) {
             requested_shell = .zsh;
+        } else if (std.mem.eql(u8, shell_str, "fish")) {
+            requested_shell = .fish;
         }
     }
 
@@ -26,6 +28,7 @@ fn installShellCommand(alloc: std.mem.Allocator, install_args: cli.ShellInstallA
             \\Unable to detect shell type. Please specify explicitly:
             \\  sly shell install bash
             \\  sly shell install zsh
+            \\  sly shell install fish
             \\
         , .{});
         try stdout_writer.interface.flush();
@@ -50,6 +53,7 @@ fn installShellCommand(alloc: std.mem.Allocator, install_args: cli.ShellInstallA
     const plugin_filename = switch (shell) {
         .bash => "sly.plugin.sh",
         .zsh => "sly.plugin.zsh",
+        .fish => "sly.plugin.fish",
         .unknown => unreachable,
     };
 
@@ -96,7 +100,7 @@ fn showHelp() !void {
         \\
         \\Usage:
         \\  sly [OPTIONS] "natural language query"
-        \\  sly shell install [--shell <bash|zsh>] [--auto]
+        \\  sly shell install [--shell <bash|zsh|fish>] [--auto]
         \\  sly feedbytes [--input "text"] [--snapshot] [--raw]
         \\
         \\Options:
@@ -105,7 +109,7 @@ fn showHelp() !void {
         \\
         \\Commands:
         \\  shell install              Install shell integration
-        \\    --shell <bash|zsh>       Specify shell (auto-detects if omitted)
+        \\    --shell <bash|zsh|fish>  Specify shell (auto-detects if omitted)
         \\    --auto, -a               Automatically add source line to shell rc file
         \\
         \\  feedbytes                  Process VT sequences (for testing terminal runtime)
@@ -118,6 +122,7 @@ fn showHelp() !void {
         \\  sly "show disk usage sorted by size"
         \\  sly shell install                    # Auto-detect and install
         \\  sly shell install --shell zsh --auto # Install for zsh and update ~/.zshrc
+        \\  sly shell install --shell fish       # Install for Fish shell
         \\  sly feedbytes --input "Hello\x1b[1;31mWorld\x1b[0m" --snapshot
         \\  echo -e "\x1b[1mBold text\x1b[0m" | sly feedbytes --raw
         \\
