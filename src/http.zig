@@ -209,7 +209,7 @@ test "calculateConnectTimeout - basic cases" {
     const testing = std.testing;
 
     try testing.expectEqual(@as(u32, 5000), calculateConnectTimeout(10000));
-    try testing.expectEqual(@as(u32, 15000), calculateConnectTimeout(30000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(30000)); // capped at 10000
     try testing.expectEqual(@as(u32, 0), calculateConnectTimeout(0));
     try testing.expectEqual(@as(u32, 1), calculateConnectTimeout(2));
 }

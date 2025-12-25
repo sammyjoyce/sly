@@ -146,6 +146,7 @@ pub const KEY_RETURN: u32 = 0x28;
 pub const KEY_ESCAPE: u32 = 0x29;
 pub const KEY_BACKSPACE: u32 = 0x2A;
 pub const KEY_TAB: u32 = 0x2B;
+pub const KEY_SPACE: u32 = 0x2C;
 pub const KEY_DELETE: u32 = 0x4C;
 
 // Navigation keys
