@@ -1,10 +1,16 @@
+//! HTTP client module using libcurl for making JSON API requests.
+//! Provides a simple interface for POST requests with configurable timeouts.
+
 const std = @import("std");
 const c = @cImport({
     @cInclude("curl/curl.h");
 });
 
+/// HTTP response from a completed request.
 pub const Response = struct {
+    /// HTTP status code (e.g., 200, 404, 500).
     status: u32,
+    /// Response body bytes. Caller owns this memory and must free with the same allocator.
     body: []u8,
 };
 
@@ -29,6 +35,8 @@ fn slistAppend(head: ?*c.struct_curl_slist, s: []const u8) ?*c.struct_curl_slist
     return c.curl_slist_append(head, @ptrCast(z));
 }
 
+/// Sends a POST request with JSON content type and a 30-second timeout.
+/// Returns error.Unavailable if curl initialization fails, or error.Network on request failure.
 pub fn postJson(
     allocator: std.mem.Allocator,
     url: []const u8,
@@ -38,6 +46,9 @@ pub fn postJson(
     return postJsonWithTimeout(allocator, url, headers, body, 30000);
 }
 
+/// Sends a POST request with JSON content type and configurable timeout.
+/// The `Content-Type: application/json` header is added automatically.
+/// Connection timeout is set to half of `timeout_ms`, capped at 10 seconds.
 pub fn postJsonWithTimeout(
     allocator: std.mem.Allocator,
     url: []const u8,
