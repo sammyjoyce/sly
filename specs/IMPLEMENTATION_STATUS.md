@@ -1,6 +1,6 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 28)
+**Last Updated:** 2025-12-26 (Work Session 29)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
@@ -277,6 +277,19 @@ This document tracks detailed implementation status for integrating libghostty-v
 - **generate()** - Base provider query with optional snapshot context
 - **generatePlan()** - Provider query + schema validation with retries
 - **formatSnapshotForPrompt()** - Terminal state formatting for AI
+
+### Work Session 29 Updates (2025-12-26)
+
+**New Features:**
+- ✅ HTTP 429 rate-limit handling in providers.zig
+- ✅ OSC 1 (icon name) policy handler in policy_engine.zig
+- ✅ FailureSeverity usage in command_planner.zig
+- ✅ Timeout handling in CommandPlan execution
+- ✅ Plan retry logic with configurable exponential backoff
+- ✅ Mouse shape OSC policy handler
+
+**Test Results:**
+- ✅ All tests passing (130+ unit tests across terminal_runtime, policy_engine, command_planner)
 
 ### Work Session 28 Updates (2025-12-26)
 
@@ -591,9 +604,26 @@ zig build test-ghostty   # Run libghostty integration tests
 - `specs/libghostty-design-decisions.md` - Design rationale
 - `specs/libghostty-implementation-plan.md` - Phase-by-phase plan
 
-## Current Status (Updated 2025-12-26 Work Session 28)
+## Current Status (Updated 2025-12-26 Work Session 29)
 
 **🎉 Major Achievement:** All core phases (0-7) are now **100% COMPLETE** with production fixes and terminal state enhancements!
+
+### Work Session 29 Highlights (2025-12-26)
+
+**Provider & Execution Robustness:**
+- ✅ HTTP 429 rate-limit handling in providers.zig
+- ✅ Plan retry logic with configurable exponential backoff
+- ✅ Timeout handling in CommandPlan execution
+
+**Policy Engine Extensions:**
+- ✅ OSC 1 (icon name) policy handler
+- ✅ Mouse shape OSC policy handler
+
+**Command Planner Improvements:**
+- ✅ FailureSeverity usage for failure signal classification
+
+**Test Results:**
+- ✅ All tests passing (130+ unit tests)
 
 ### Work Session 28 Highlights (2025-12-26)
 

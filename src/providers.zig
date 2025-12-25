@@ -265,6 +265,11 @@ pub fn query(
 
     defer allocator.free(resp.body);
 
+    // Check for rate limiting before processing response
+    if (resp.status == 429) {
+        return error.TooManyRequests;
+    }
+
     // Extract the text response which should contain CommandPlan JSON
     const val: ?[]u8 = switch (cfg.provider) {
         .anthropic => extractFirstStringAfter(allocator, resp.body, "text"),
@@ -317,6 +322,7 @@ fn isTransientError(err: anyerror) bool {
         error.ConnectionTimedOut,
         error.TemporaryNameServerFailure,
         error.NameServerFailure,
+        error.TooManyRequests,
         => true,
         else => false,
     };

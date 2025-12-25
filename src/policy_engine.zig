@@ -48,6 +48,12 @@ pub const PolicyConfig = struct {
     /// Require confirmation for title changes
     confirm_title_changes: bool = false,
 
+    /// Allow icon name changes (OSC 1)
+    allow_icon_changes: bool = true,
+
+    /// Require confirmation for icon changes
+    confirm_icon_changes: bool = false,
+
     /// Allow hyperlinks (OSC 8)
     allow_hyperlinks: bool = true,
 
@@ -78,6 +84,12 @@ pub const PolicyConfig = struct {
     /// Require confirmation for notifications
     confirm_notifications: bool = true,
 
+    /// Allow OSC 22 (mouse shape changes)
+    allow_mouse_shape: bool = false,
+
+    /// Require confirmation for mouse shape changes
+    confirm_mouse_shape: bool = true,
+
     /// Default behavior for unknown OSC commands
     default_unknown: PolicyVerdict = .confirm,
 };
@@ -89,6 +101,8 @@ pub const DEFAULT_POLICY = PolicyConfig{};
 pub const STRICT_POLICY = PolicyConfig{
     .allow_title_changes = true,
     .confirm_title_changes = true,
+    .allow_icon_changes = true,
+    .confirm_icon_changes = true,
     .allow_hyperlinks = true,
     .confirm_hyperlinks = true,
     .allow_palette_changes = false,
@@ -99,6 +113,8 @@ pub const STRICT_POLICY = PolicyConfig{
     .allow_shell_integration = true,
     .allow_notifications = false,
     .confirm_notifications = false,
+    .allow_mouse_shape = false,
+    .confirm_mouse_shape = false,
     .default_unknown = .reject,
 };
 
@@ -106,6 +122,8 @@ pub const STRICT_POLICY = PolicyConfig{
 pub const PERMISSIVE_POLICY = PolicyConfig{
     .allow_title_changes = true,
     .confirm_title_changes = false,
+    .allow_icon_changes = true,
+    .confirm_icon_changes = false,
     .allow_hyperlinks = true,
     .confirm_hyperlinks = false,
     .allow_palette_changes = true,
@@ -116,6 +134,8 @@ pub const PERMISSIVE_POLICY = PolicyConfig{
     .allow_shell_integration = true,
     .allow_notifications = true,
     .confirm_notifications = false,
+    .allow_mouse_shape = true,
+    .confirm_mouse_shape = false,
     .default_unknown = .allow,
 };
 
@@ -167,6 +187,33 @@ pub const PolicyEngine = struct {
                     break :blk PolicyDecision{
                         .verdict = .reject,
                         .rationale = try self.allocator.dupe(u8, "Window title changes are blocked by policy"),
+                    };
+                }
+            },
+
+            ghostty.OSC_COMMAND_CHANGE_WINDOW_ICON => blk: {
+                if (self.config.confirm_icon_changes) {
+                    self.stats.confirmations += 1;
+                    break :blk PolicyDecision{
+                        .verdict = .confirm,
+                        .rationale = try self.allocator.dupe(u8, "Window icon change requires confirmation"),
+                        .metadata = if (payload) |p| try std.fmt.allocPrint(
+                            self.allocator,
+                            "New icon: {s}",
+                            .{if (p.len > 50) p[0..50] else p},
+                        ) else null,
+                    };
+                } else if (self.config.allow_icon_changes) {
+                    self.stats.allows += 1;
+                    break :blk PolicyDecision{
+                        .verdict = .allow,
+                        .rationale = try self.allocator.dupe(u8, "Window icon changes are allowed"),
+                    };
+                } else {
+                    self.stats.rejections += 1;
+                    break :blk PolicyDecision{
+                        .verdict = .reject,
+                        .rationale = try self.allocator.dupe(u8, "Window icon changes are blocked by policy"),
                     };
                 }
             },
@@ -306,6 +353,33 @@ pub const PolicyEngine = struct {
                     break :blk PolicyDecision{
                         .verdict = .reject,
                         .rationale = try self.allocator.dupe(u8, "Notifications are blocked by policy"),
+                    };
+                }
+            },
+
+            ghostty.OSC_COMMAND_MOUSE_SHAPE => blk: {
+                if (self.config.confirm_mouse_shape) {
+                    self.stats.confirmations += 1;
+                    break :blk PolicyDecision{
+                        .verdict = .confirm,
+                        .rationale = try self.allocator.dupe(u8, "Mouse shape changes require confirmation"),
+                        .metadata = if (payload) |p| try std.fmt.allocPrint(
+                            self.allocator,
+                            "Shape: {s}",
+                            .{if (p.len > 50) p[0..50] else p},
+                        ) else null,
+                    };
+                } else if (self.config.allow_mouse_shape) {
+                    self.stats.allows += 1;
+                    break :blk PolicyDecision{
+                        .verdict = .allow,
+                        .rationale = try self.allocator.dupe(u8, "Mouse shape changes are allowed"),
+                    };
+                } else {
+                    self.stats.rejections += 1;
+                    break :blk PolicyDecision{
+                        .verdict = .reject,
+                        .rationale = try self.allocator.dupe(u8, "Mouse shape changes are blocked by policy"),
                     };
                 }
             },
@@ -503,6 +577,52 @@ test "policy engine - reject title changes" {
     try testing.expectEqual(@as(u64, 1), engine.stats.rejections);
 }
 
+test "policy engine - allow icon changes" {
+    const testing = std.testing;
+
+    var engine = PolicyEngine.init(testing.allocator, .{
+        .allow_icon_changes = true,
+        .confirm_icon_changes = false,
+    });
+
+    var decision = try engine.evaluateOsc(ghostty.OSC_COMMAND_CHANGE_WINDOW_ICON, "my-icon");
+    defer decision.deinit(testing.allocator);
+
+    try testing.expectEqual(PolicyVerdict.allow, decision.verdict);
+    try testing.expectEqual(@as(u64, 1), engine.stats.allows);
+}
+
+test "policy engine - confirm icon changes" {
+    const testing = std.testing;
+
+    var engine = PolicyEngine.init(testing.allocator, .{
+        .allow_icon_changes = true,
+        .confirm_icon_changes = true,
+    });
+
+    var decision = try engine.evaluateOsc(ghostty.OSC_COMMAND_CHANGE_WINDOW_ICON, "my-icon");
+    defer decision.deinit(testing.allocator);
+
+    try testing.expectEqual(PolicyVerdict.confirm, decision.verdict);
+    try testing.expectEqual(@as(u64, 1), engine.stats.confirmations);
+    try testing.expect(decision.metadata != null);
+}
+
+test "policy engine - reject icon changes" {
+    const testing = std.testing;
+
+    var engine = PolicyEngine.init(testing.allocator, .{
+        .allow_icon_changes = false,
+        .confirm_icon_changes = false,
+    });
+
+    var decision = try engine.evaluateOsc(ghostty.OSC_COMMAND_CHANGE_WINDOW_ICON, null);
+    defer decision.deinit(testing.allocator);
+
+    try testing.expectEqual(PolicyVerdict.reject, decision.verdict);
+    try testing.expectEqual(@as(u64, 1), engine.stats.rejections);
+}
+
 test "policy engine - hyperlink confirmation" {
     const testing = std.testing;
 
@@ -652,4 +772,61 @@ test "PERMISSIVE_POLICY allows most operations" {
     try std.testing.expect(policy.allow_notifications);
     try std.testing.expect(!policy.confirm_osc52);
     try std.testing.expect(policy.default_unknown == .allow);
+}
+
+test "policy engine - mouse shape confirmation" {
+    const testing = std.testing;
+
+    var engine = PolicyEngine.init(testing.allocator, .{
+        .allow_mouse_shape = true,
+        .confirm_mouse_shape = true,
+    });
+
+    var decision = try engine.evaluateOsc(ghostty.OSC_COMMAND_MOUSE_SHAPE, "pointer");
+    defer decision.deinit(testing.allocator);
+
+    try testing.expectEqual(PolicyVerdict.confirm, decision.verdict);
+    try testing.expectEqual(@as(u64, 1), engine.stats.confirmations);
+    try testing.expect(decision.metadata != null);
+}
+
+test "policy engine - mouse shape blocked by default" {
+    const testing = std.testing;
+
+    var engine = PolicyEngine.init(testing.allocator, DEFAULT_POLICY);
+
+    var decision = try engine.evaluateOsc(ghostty.OSC_COMMAND_MOUSE_SHAPE, "crosshair");
+    defer decision.deinit(testing.allocator);
+
+    try testing.expectEqual(PolicyVerdict.confirm, decision.verdict);
+}
+
+test "policy engine - mouse shape allowed" {
+    const testing = std.testing;
+
+    var engine = PolicyEngine.init(testing.allocator, .{
+        .allow_mouse_shape = true,
+        .confirm_mouse_shape = false,
+    });
+
+    var decision = try engine.evaluateOsc(ghostty.OSC_COMMAND_MOUSE_SHAPE, "text");
+    defer decision.deinit(testing.allocator);
+
+    try testing.expectEqual(PolicyVerdict.allow, decision.verdict);
+    try testing.expectEqual(@as(u64, 1), engine.stats.allows);
+}
+
+test "policy engine - mouse shape rejected" {
+    const testing = std.testing;
+
+    var engine = PolicyEngine.init(testing.allocator, .{
+        .allow_mouse_shape = false,
+        .confirm_mouse_shape = false,
+    });
+
+    var decision = try engine.evaluateOsc(ghostty.OSC_COMMAND_MOUSE_SHAPE, null);
+    defer decision.deinit(testing.allocator);
+
+    try testing.expectEqual(PolicyVerdict.reject, decision.verdict);
+    try testing.expectEqual(@as(u64, 1), engine.stats.rejections);
 }
