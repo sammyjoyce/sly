@@ -64,11 +64,39 @@ pub const InitParams = struct {
 /// A single cell in the terminal framebuffer with character and styling
 pub const Cell = struct {
     char: u8 = ' ',
-    fg_color: ?u8 = null,
-    bg_color: ?u8 = null,
+    fg_color: Color = .none,
+    bg_color: Color = .none,
     bold: bool = false,
     italic: bool = false,
     underline: ghostty.SgrUnderline = 0, // GHOSTTY_SGR_UNDERLINE_NONE
+};
+
+/// Color representation supporting 8-color, 256-color, and RGB
+pub const Color = union(enum) {
+    none,
+    indexed: u8, // 0-255 for 8/256 color palette
+    rgb: struct { r: u8, g: u8, b: u8 },
+
+    pub fn eql(self: Color, other: Color) bool {
+        return switch (self) {
+            .none => other == .none,
+            .indexed => |i| switch (other) {
+                .indexed => |j| i == j,
+                else => false,
+            },
+            .rgb => |c1| switch (other) {
+                .rgb => |c2| c1.r == c2.r and c1.g == c2.g and c1.b == c2.b,
+                else => false,
+            },
+        };
+    }
+};
+
+/// Cursor display style
+pub const CursorStyle = enum {
+    block,
+    underline,
+    bar,
 };
 
 /// Parse state for escape sequence detection
@@ -112,6 +140,11 @@ pub const TerminalRuntime = struct {
     /// Current cursor position
     cursor_row: u16 = 0,
     cursor_col: u16 = 0,
+
+    /// Cursor visibility and style
+    cursor_visible: bool = true,
+    cursor_style: CursorStyle = .block,
+    cursor_blinking: bool = true,
 
     /// Current styling attributes (applied to new characters)
     current_style: Cell = .{},
@@ -234,12 +267,25 @@ pub const TerminalRuntime = struct {
 
     /// Reset the terminal to initial state
     pub fn reset(self: *TerminalRuntime) !void {
-        _ = self; // TODO: Use self when implementing
-        // TODO: Implement full reset logic
-        // - Flush SGR/OSC parsers
-        // - Clear scrollback
-        // - Zero key encoder state
-        // - Recreate snapshots
+        // Clear framebuffer - reset all cells to default
+        for (self.framebuffer.items) |*row| {
+            for (row.items) |*cell| {
+                cell.* = Cell{};
+            }
+        }
+
+        // Reset cursor position
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+
+        // Reset styling
+        self.current_style = Cell{};
+
+        // Clear OSC events
+        for (self.osc_events.items) |*event| {
+            event.deinit(self.allocator);
+        }
+        self.osc_events.clearRetainingCapacity();
 
         std.log.info("Terminal runtime reset", .{});
     }
@@ -574,10 +620,24 @@ pub const TerminalRuntime = struct {
                     self.current_style.underline = ghostty.SGR_UNDERLINE_NONE;
                 },
                 ghostty.SGR_ATTR_FG_8 => {
-                    self.current_style.fg_color = attr.value.fg_8;
+                    self.current_style.fg_color = .{ .indexed = attr.value.fg_8 };
                 },
                 ghostty.SGR_ATTR_BG_8 => {
-                    self.current_style.bg_color = attr.value.bg_8;
+                    self.current_style.bg_color = .{ .indexed = attr.value.bg_8 };
+                },
+                ghostty.SGR_ATTR_FG_256 => {
+                    self.current_style.fg_color = .{ .indexed = attr.value.fg_256 };
+                },
+                ghostty.SGR_ATTR_BG_256 => {
+                    self.current_style.bg_color = .{ .indexed = attr.value.bg_256 };
+                },
+                ghostty.SGR_ATTR_DIRECT_COLOR_FG => {
+                    const rgb = attr.value.direct_color_fg;
+                    self.current_style.fg_color = .{ .rgb = .{ .r = rgb.r, .g = rgb.g, .b = rgb.b } };
+                },
+                ghostty.SGR_ATTR_DIRECT_COLOR_BG => {
+                    const rgb = attr.value.direct_color_bg;
+                    self.current_style.bg_color = .{ .rgb = .{ .r = rgb.r, .g = rgb.g, .b = rgb.b } };
                 },
                 ghostty.SGR_ATTR_UNSET => {
                     // Reset all styling (SGR 0)
@@ -821,6 +881,9 @@ pub const TerminalRuntime = struct {
             .framebuffer = fb_copy,
             .cursor_row = self.cursor_row,
             .cursor_col = self.cursor_col,
+            .cursor_visible = self.cursor_visible,
+            .cursor_style = self.cursor_style,
+            .cursor_blinking = self.cursor_blinking,
             .osc_events = osc_copy,
         };
     }
@@ -832,8 +895,8 @@ pub const TerminalRuntime = struct {
         for (framebuffer) |row| {
             for (row) |cell| {
                 hasher.update(&[_]u8{cell.char});
-                if (cell.fg_color) |c| hasher.update(&[_]u8{c});
-                if (cell.bg_color) |c| hasher.update(&[_]u8{c});
+                hashColor(&hasher, cell.fg_color);
+                hashColor(&hasher, cell.bg_color);
                 hasher.update(&[_]u8{@intFromBool(cell.bold)});
                 hasher.update(&[_]u8{@intFromBool(cell.italic)});
                 // underline is c_uint, truncate to u8 for hashing
@@ -846,6 +909,21 @@ pub const TerminalRuntime = struct {
         hasher.update(std.mem.asBytes(&cursor_col));
 
         return hasher.final();
+    }
+
+    /// Hash a Color value
+    fn hashColor(hasher: *std.hash.Wyhash, color: Color) void {
+        switch (color) {
+            .none => hasher.update(&[_]u8{0}),
+            .indexed => |i| {
+                hasher.update(&[_]u8{1});
+                hasher.update(&[_]u8{i});
+            },
+            .rgb => |c| {
+                hasher.update(&[_]u8{2});
+                hasher.update(&[_]u8{ c.r, c.g, c.b });
+            },
+        }
     }
 };
 
@@ -899,6 +977,11 @@ pub const Snapshot = struct {
     cursor_row: u16,
     cursor_col: u16,
 
+    /// Cursor visibility and style
+    cursor_visible: bool,
+    cursor_style: CursorStyle,
+    cursor_blinking: bool,
+
     /// Recent OSC events
     osc_events: []const OscEvent,
 
@@ -911,6 +994,99 @@ pub const Snapshot = struct {
         allocator.free(self.osc_events);
     }
 };
+
+/// Format a terminal snapshot for LLM context
+pub fn formatSnapshotForPrompt(allocator: std.mem.Allocator, snapshot: *const Snapshot) ![]u8 {
+    var buf = std.ArrayList(u8){};
+    errdefer buf.deinit(allocator);
+
+    // Header with dimensions
+    try buf.appendSlice(allocator, "Terminal State (");
+    try std.fmt.format(buf.writer(allocator), "{}x{}):\n", .{ snapshot.cols, snapshot.rows });
+
+    // Cursor position
+    try std.fmt.format(buf.writer(allocator), "Cursor: row {}, col {}\n", .{
+        snapshot.cursor_row, snapshot.cursor_col,
+    });
+
+    // Extract non-empty lines (last N, max 10)
+    var line_count: usize = 0;
+    const max_lines: usize = 10;
+
+    // Find non-empty rows from the end (last N lines)
+    var non_empty_indices = std.ArrayList(usize){};
+    defer non_empty_indices.deinit(allocator);
+
+    for (snapshot.framebuffer, 0..) |row, idx| {
+        var has_content = false;
+        for (row) |cell| {
+            if (cell.char != ' ' and cell.char != 0) {
+                has_content = true;
+                break;
+            }
+        }
+        if (has_content) {
+            try non_empty_indices.append(allocator, idx);
+        }
+    }
+
+    // Take the last max_lines non-empty lines
+    const start_idx = if (non_empty_indices.items.len > max_lines)
+        non_empty_indices.items.len - max_lines
+    else
+        0;
+
+    for (non_empty_indices.items[start_idx..]) |row_idx| {
+        if (line_count >= max_lines) break;
+
+        const row = snapshot.framebuffer[row_idx];
+        try buf.appendSlice(allocator, "  | ");
+        for (row) |cell| {
+            if (cell.char != 0) {
+                try buf.append(allocator, cell.char);
+            }
+        }
+        // Trim trailing spaces
+        while (buf.items.len > 0 and buf.items[buf.items.len - 1] == ' ') {
+            _ = buf.pop();
+        }
+        try buf.append(allocator, '\n');
+        line_count += 1;
+    }
+
+    // Include safe OSC events (filter out sensitive ones)
+    if (snapshot.osc_events.len > 0) {
+        var has_safe_events = false;
+        for (snapshot.osc_events) |event| {
+            const name = getOscEventName(event.command_type);
+            if (name != null) {
+                if (!has_safe_events) {
+                    try buf.appendSlice(allocator, "\nRecent Shell Events:\n");
+                    has_safe_events = true;
+                }
+                try std.fmt.format(buf.writer(allocator), "  - {s}\n", .{name.?});
+            }
+        }
+    }
+
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Get human-readable name for safe OSC events, returns null for sensitive ones
+fn getOscEventName(command_type: ghostty.OscCommandType) ?[]const u8 {
+    return switch (command_type) {
+        ghostty.OSC_COMMAND_CHANGE_WINDOW_TITLE => "Title Change",
+        ghostty.OSC_COMMAND_CHANGE_WINDOW_ICON => "Icon Change",
+        ghostty.OSC_COMMAND_REPORT_PWD => "Directory Change",
+        ghostty.OSC_COMMAND_PROMPT_START => "Prompt Start",
+        ghostty.OSC_COMMAND_PROMPT_END => "Prompt End",
+        ghostty.OSC_COMMAND_END_OF_INPUT => "End of Input",
+        ghostty.OSC_COMMAND_END_OF_COMMAND => "End of Command",
+        // Skip sensitive events (clipboard, notifications, etc.)
+        ghostty.OSC_COMMAND_CLIPBOARD_CONTENTS => null,
+        else => null,
+    };
+}
 
 // Unit tests
 test "terminal runtime initialization" {
@@ -1206,18 +1382,18 @@ test "feedBytes - SGR bold and color" {
 
     // Check that "RED" has bold and color
     try testing.expect(runtime.framebuffer.items[0].items[0].bold);
-    try testing.expectEqual(@as(?u8, 1), runtime.framebuffer.items[0].items[0].fg_color); // Red
+    try testing.expect(runtime.framebuffer.items[0].items[0].fg_color.eql(.{ .indexed = 1 })); // Red
     try testing.expectEqual(@as(u8, 'R'), runtime.framebuffer.items[0].items[0].char);
 
     try testing.expect(runtime.framebuffer.items[0].items[1].bold);
-    try testing.expectEqual(@as(?u8, 1), runtime.framebuffer.items[0].items[1].fg_color);
+    try testing.expect(runtime.framebuffer.items[0].items[1].fg_color.eql(.{ .indexed = 1 }));
 
     try testing.expect(runtime.framebuffer.items[0].items[2].bold);
-    try testing.expectEqual(@as(?u8, 1), runtime.framebuffer.items[0].items[2].fg_color);
+    try testing.expect(runtime.framebuffer.items[0].items[2].fg_color.eql(.{ .indexed = 1 }));
 
     // Check that "Normal" doesn't have bold or color (reset)
     try testing.expect(!runtime.framebuffer.items[0].items[3].bold);
-    try testing.expectEqual(@as(?u8, null), runtime.framebuffer.items[0].items[3].fg_color);
+    try testing.expect(runtime.framebuffer.items[0].items[3].fg_color.eql(.none));
 }
 
 test "feedBytes - OSC window title" {
@@ -1282,4 +1458,150 @@ test "feedBytes - snapshot hash changes with content" {
 
     // Hashes should be different
     try testing.expect(hash1 != hash2);
+}
+
+test "cursor style and visibility" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // Check default cursor state
+    try testing.expect(runtime.cursor_visible);
+    try testing.expectEqual(CursorStyle.block, runtime.cursor_style);
+    try testing.expect(runtime.cursor_blinking);
+
+    // Modify cursor state
+    runtime.cursor_visible = false;
+    runtime.cursor_style = .bar;
+    runtime.cursor_blinking = false;
+
+    // Verify changes persist in snapshot
+    var snap = try runtime.snapshot(.{});
+    defer snap.deinit(testing.allocator);
+
+    try testing.expect(!snap.cursor_visible);
+    try testing.expectEqual(CursorStyle.bar, snap.cursor_style);
+    try testing.expect(!snap.cursor_blinking);
+}
+
+test "reset - clears terminal state" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // Add content and move cursor
+    try runtime.feedBytes("Hello\x1b[1;31mWorld");
+
+    // Verify state is non-default
+    try testing.expectEqual(@as(u8, 'H'), runtime.framebuffer.items[0].items[0].char);
+    try testing.expect(runtime.cursor_col > 0);
+    try testing.expect(runtime.current_style.bold);
+
+    // Add an OSC event
+    try runtime.feedBytes("\x1b]2;Test Title\x07");
+    try testing.expectEqual(@as(usize, 1), runtime.osc_events.items.len);
+
+    // Reset the terminal
+    try runtime.reset();
+
+    // Verify framebuffer is cleared
+    try testing.expectEqual(@as(u8, ' '), runtime.framebuffer.items[0].items[0].char);
+
+    // Verify cursor is at origin
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_row);
+    try testing.expectEqual(@as(u16, 0), runtime.cursor_col);
+
+    // Verify style is reset
+    try testing.expect(!runtime.current_style.bold);
+    try testing.expect(runtime.current_style.fg_color.eql(.none));
+
+    // Verify OSC events are cleared
+    try testing.expectEqual(@as(usize, 0), runtime.osc_events.items.len);
+}
+
+test "formatSnapshotForPrompt - basic formatting" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{
+        .cols = 40,
+        .rows = 10,
+    });
+    defer runtime.shutdown();
+
+    // Add some content
+    try runtime.feedBytes("Hello World");
+
+    // Take snapshot
+    var snap = try runtime.snapshot(.{});
+    defer snap.deinit(testing.allocator);
+
+    // Format for prompt
+    const formatted = try formatSnapshotForPrompt(testing.allocator, &snap);
+    defer testing.allocator.free(formatted);
+
+    // Check header is present
+    try testing.expect(std.mem.indexOf(u8, formatted, "Terminal State (40x10):") != null);
+
+    // Check cursor position is present
+    try testing.expect(std.mem.indexOf(u8, formatted, "Cursor: row 0, col 11") != null);
+
+    // Check content line is present
+    try testing.expect(std.mem.indexOf(u8, formatted, "  | Hello World") != null);
+}
+
+test "formatSnapshotForPrompt - with OSC events" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // Add OSC title change event
+    try runtime.feedBytes("\x1b]2;My Terminal\x07");
+
+    // Take snapshot
+    var snap = try runtime.snapshot(.{});
+    defer snap.deinit(testing.allocator);
+
+    // Format for prompt
+    const formatted = try formatSnapshotForPrompt(testing.allocator, &snap);
+    defer testing.allocator.free(formatted);
+
+    // Check OSC events section is present
+    try testing.expect(std.mem.indexOf(u8, formatted, "Recent Shell Events:") != null);
+    try testing.expect(std.mem.indexOf(u8, formatted, "  - Title Change") != null);
+}
+
+test "formatSnapshotForPrompt - max lines limit" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{
+        .cols = 40,
+        .rows = 20,
+    });
+    defer runtime.shutdown();
+
+    // Add more than 10 lines of content
+    for (0..15) |_| {
+        try runtime.feedBytes("Line X\n");
+    }
+
+    // Take snapshot
+    var snap = try runtime.snapshot(.{});
+    defer snap.deinit(testing.allocator);
+
+    // Format for prompt
+    const formatted = try formatSnapshotForPrompt(testing.allocator, &snap);
+    defer testing.allocator.free(formatted);
+
+    // Count lines starting with "  | " (should be max 10)
+    var line_count: usize = 0;
+    var iter = std.mem.splitSequence(u8, formatted, "\n");
+    while (iter.next()) |line| {
+        if (std.mem.startsWith(u8, line, "  | ")) {
+            line_count += 1;
+        }
+    }
+    try testing.expect(line_count <= 10);
 }

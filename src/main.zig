@@ -279,7 +279,7 @@ fn feedbytesCommand(alloc: std.mem.Allocator, fb_args: cli.FeedbytesArgs) !void 
             var has_style = false;
             for (row) |cell| {
                 if (cell.bold or cell.italic or cell.underline != 0 or
-                    cell.fg_color != null or cell.bg_color != null)
+                    cell.fg_color != .none or cell.bg_color != .none)
                 {
                     has_style = true;
                     break;
@@ -296,15 +296,31 @@ fn feedbytesCommand(alloc: std.mem.Allocator, fb_args: cli.FeedbytesArgs) !void 
                         if (cell.bold) try styles.appendSlice(alloc, "B");
                         if (cell.italic) try styles.appendSlice(alloc, "I");
                         if (cell.underline != 0) try styles.appendSlice(alloc, "U");
-                        if (cell.fg_color) |fg| {
-                            var buf: [16]u8 = undefined;
-                            const fg_str = try std.fmt.bufPrint(&buf, "fg{d}", .{fg});
-                            try styles.appendSlice(alloc, fg_str);
+                        switch (cell.fg_color) {
+                            .none => {},
+                            .indexed => |fg| {
+                                var buf: [16]u8 = undefined;
+                                const fg_str = try std.fmt.bufPrint(&buf, "fg{d}", .{fg});
+                                try styles.appendSlice(alloc, fg_str);
+                            },
+                            .rgb => |c| {
+                                var buf: [24]u8 = undefined;
+                                const fg_str = try std.fmt.bufPrint(&buf, "fg#{x:0>2}{x:0>2}{x:0>2}", .{ c.r, c.g, c.b });
+                                try styles.appendSlice(alloc, fg_str);
+                            },
                         }
-                        if (cell.bg_color) |bg| {
-                            var buf: [16]u8 = undefined;
-                            const bg_str = try std.fmt.bufPrint(&buf, "bg{d}", .{bg});
-                            try styles.appendSlice(alloc, bg_str);
+                        switch (cell.bg_color) {
+                            .none => {},
+                            .indexed => |bg| {
+                                var buf: [16]u8 = undefined;
+                                const bg_str = try std.fmt.bufPrint(&buf, "bg{d}", .{bg});
+                                try styles.appendSlice(alloc, bg_str);
+                            },
+                            .rgb => |c| {
+                                var buf: [24]u8 = undefined;
+                                const bg_str = try std.fmt.bufPrint(&buf, "bg#{x:0>2}{x:0>2}{x:0>2}", .{ c.r, c.g, c.b });
+                                try styles.appendSlice(alloc, bg_str);
+                            },
                         }
 
                         if (styles.items.len > 0) {

@@ -1,6 +1,6 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 19)
+**Last Updated:** 2025-12-26 (Work Session 21)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
@@ -383,6 +383,15 @@ zig build test-ghostty   # Run libghostty integration tests
 - Key encoder tests (4 tests: basic/modifiers/Alt/cursor mode)
 - feedBytes tests (5 tests including SGR, OSC, snapshot generation)
 
+### Work Session 21 Updates (2025-12-26)
+
+- Added `formatSnapshotForPrompt()` function for LLM context generation
+- Added `CursorStyle` enum and cursor visibility/blinking support
+- Added `Color` union type with 256-color and RGB support
+- Implemented `TerminalRuntime.reset()` method with full functionality
+- Updated `computeHash()` to properly hash new `Color` type
+- All 108+ tests continue to pass
+
 ### Work Session 20 Updates (2025-12-26)
 
 - Fixed OpenAI Responses API field extraction (`"output"` → `"output_text"`) in providers.zig
@@ -430,18 +439,19 @@ zig build test-ghostty   # Run libghostty integration tests
 - `specs/libghostty-design-decisions.md` - Design rationale
 - `specs/libghostty-implementation-plan.md` - Phase-by-phase plan
 
-## Current Status (Updated 2025-12-26 Work Session 19)
+## Current Status (Updated 2025-12-26 Work Session 21)
 
-**🎉 Major Achievement:** All core phases (0-7) are now **100% COMPLETE** with production fixes applied!
+**🎉 Major Achievement:** All core phases (0-7) are now **100% COMPLETE** with production fixes and terminal state enhancements!
 
-### Work Session 19 Updates (2025-12-26)
+### Work Session 21 Highlights
 
-**Shell Plugin Sync:**
-- ✅ Synced `src/sly.plugin.zsh` and `src/bash-sly.plugin.sh` to match `lib/` versions
-- ✅ These `src/` files are the canonical versions embedded via `@embedFile`
-- ✅ Both plugins use `sly plan --query --context` for CommandPlan JSON output
+**Terminal Runtime Enhancements:**
+- ✅ Added `formatSnapshotForPrompt()` for LLM context generation
+- ✅ Added `CursorStyle` enum (block, underline, bar, blinking variants)
+- ✅ Added `Color` union type with 256-color palette and true RGB support
+- ✅ Implemented full `reset()` method (framebuffer clear, cursor home, style reset)
+- ✅ Updated `computeHash()` to properly hash `Color` union type
 - ✅ All 108+ tests continue to pass
-- ✅ Build completed successfully with ReleaseSafe optimization
 
 ### ✅ Completed Implementation
 
