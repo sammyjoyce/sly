@@ -3,6 +3,7 @@
 #
 # Environment variables:
 #   SLY_TIMEOUT  - Generation timeout in seconds (default: 30)
+#   SLY_SPINNER  - Enable/disable spinner animation (default: 1)
 #   SLY_COLOR    - Enable/disable color output (default: 1)
 
 # Portable timeout function (uses fish's timeout if available, or gtimeout)
@@ -67,16 +68,38 @@ function __sly_expand
         set timeout_val $SLY_TIMEOUT
     end
     
-    # Call sly plan
-    set -l plan_json
-    set -l rc
+    # Call sly plan with optional spinner
+    set -l tmp (mktemp -t sly.XXXXXX)
+    
     if test -n "$context"
-        set plan_json (__sly_run_with_timeout $timeout_val sly plan --query "$query" --context "$context" 2>/dev/null)
-        set rc $status
+        __sly_run_with_timeout $timeout_val sly plan --query "$query" --context "$context" >$tmp 2>/dev/null &
     else
-        set plan_json (__sly_run_with_timeout $timeout_val sly plan --query "$query" 2>/dev/null)
-        set rc $status
+        __sly_run_with_timeout $timeout_val sly plan --query "$query" >$tmp 2>/dev/null &
     end
+    set -l pid (jobs -lp | tail -1)
+    
+    # Spinner animation (can be disabled with SLY_SPINNER=0)
+    set -l spinner_enabled 1
+    if set -q SLY_SPINNER
+        set spinner_enabled $SLY_SPINNER
+    end
+    
+    if test "$spinner_enabled" != "0"
+        set -l dots "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"
+        set -l i 1
+        while kill -0 $pid 2>/dev/null
+            printf '\rGenerating... %s' $dots[$i]
+            set i (math "($i % 10) + 1")
+            sleep 0.1
+        end
+        printf '\r%s\r' "                  "
+    end
+    
+    # Wait for background job and get exit status
+    wait $pid 2>/dev/null
+    set -l rc $status
+    set -l plan_json (cat $tmp)
+    rm -f $tmp
     
     # Check for timeout (exit code 124)
     if test $rc -eq 124

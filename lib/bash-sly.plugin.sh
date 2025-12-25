@@ -6,6 +6,7 @@
 #
 # Environment variables:
 #   SLY_TIMEOUT     - Generation timeout in seconds (default: 30)
+#   SLY_SPINNER     - Enable/disable spinner animation (default: 1)
 #   SLY_COLOR       - Enable/disable color output (default: 1)
 #   SLY_BASH_ENTER  - Enable Enter key override (default: 0)
 
@@ -57,13 +58,34 @@ __sly_expand() {
       context="${context}${context:+$'\n'}Current buffer: $READLINE_LINE"
     fi
     
-    # Call sly plan with context if available
+    # Call sly plan with context if available, with optional spinner
     local rc=0
+    local tmp
+    tmp="$(mktemp -t sly.XXXXXX)"
+    trap "rm -f '$tmp'" RETURN
+    
     if [[ -n "$context" ]]; then
-      plan_json="$(__sly_run_with_timeout "$timeout_val" sly plan --query "$q" --context "$context" 2>/dev/null)"; rc=$?
+      __sly_run_with_timeout "$timeout_val" sly plan --query "$q" --context "$context" >"$tmp" 2>/dev/null &
     else
-      plan_json="$(__sly_run_with_timeout "$timeout_val" sly plan --query "$q" 2>/dev/null)"; rc=$?
+      __sly_run_with_timeout "$timeout_val" sly plan --query "$q" >"$tmp" 2>/dev/null &
     fi
+    local pid=$!
+    
+    # Spinner animation (can be disabled with SLY_SPINNER=0)
+    if [[ "${SLY_SPINNER:-1}" -eq 1 ]]; then
+      local spinner_chars='/-\|'
+      local i=0
+      while kill -0 "$pid" 2>/dev/null; do
+        printf '\rGenerating... %s' "${spinner_chars:i%4:1}"
+        ((i++))
+        sleep 0.1
+      done
+      printf '\r%s\r' "                " # Clear the spinner line
+    fi
+    
+    wait "$pid"; rc=$?
+    plan_json="$(cat "$tmp")"
+    rm -f "$tmp"
     
     # Check for timeout (exit code 124)
     if [[ $rc -eq 124 ]]; then
