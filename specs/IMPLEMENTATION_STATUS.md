@@ -30,7 +30,7 @@ This document tracks detailed implementation status for integrating libghostty-v
 | Phase 8: WebAssembly Target | ⏳ Not Started | 0% | Deferred post-MVP |
 | Phase 9: Observability & Hardening | 🔄 Partial | 45% | Response parsing robustness added (Work Session 17) |
 
-**Overall Progress:** ~94% complete (all core functionality production-ready, awaiting real-world testing)
+**Overall Progress:** ~95% complete (all core functionality production-ready, awaiting real-world testing)
 
 ## Detailed Status
 
@@ -382,6 +382,14 @@ zig build test-ghostty   # Run libghostty integration tests
 - Paste safety tests (4 tests: safe/unsafe/empty/special chars)
 - Key encoder tests (4 tests: basic/modifiers/Alt/cursor mode)
 - feedBytes tests (5 tests including SGR, OSC, snapshot generation)
+
+### Work Session 20 Updates (2025-12-26)
+
+- Fixed OpenAI Responses API field extraction (`"output"` → `"output_text"`) in providers.zig
+- Verified all 108+ tests pass
+- Verified feedbytes VT parsing works end-to-end
+- Verified echo provider produces valid CommandPlan JSON
+- Shell plugins (src/ and lib/) are in sync
 
 **policy_engine.zig (11 tests):**
 - Allow/confirm/reject title changes

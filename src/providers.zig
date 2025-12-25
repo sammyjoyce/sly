@@ -267,7 +267,7 @@ pub fn query(
     const val: ?[]u8 = switch (cfg.provider) {
         .anthropic => extractFirstStringAfter(allocator, resp.body, "text"),
         .gemini => extractFirstStringAfter(allocator, resp.body, "text"),
-        .openai => extractFirstStringAfter(allocator, resp.body, "output"),
+        .openai => extractFirstStringAfter(allocator, resp.body, "output_text"),
         .ollama => extractFirstStringAfter(allocator, resp.body, "response"),
         .echo => null,
     };
