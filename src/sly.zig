@@ -1,7 +1,58 @@
-//! Source file that exposes the executable's API and test suite to users, Autodoc, and the build system.
+//! Sly Core Module - Natural Language Shell Command Generation
 //!
-//! This module provides the core API for the sly command generator, allowing it to be used
-//! as a library or from the CLI.
+//! This module provides the central orchestration layer for sly, a tool that converts
+//! natural language queries into executable shell commands using AI providers.
+//!
+//! ## Architecture Overview
+//!
+//! Sly follows a pipeline architecture:
+//! 1. **Context Gathering**: Collect shell environment, git state, project info
+//! 2. **Prompt Construction**: Build system prompts with CommandPlan schema
+//! 3. **AI Query**: Send to provider (Anthropic, OpenAI, Gemini, Ollama)
+//! 4. **Plan Validation**: Parse and validate JSON response against CommandPlan schema
+//! 5. **Shell Integration**: Inject validated command into shell buffer
+//!
+//! ## Shell Integration Flow
+//!
+//! ```text
+//! User types "# find large files" → Plugin captures query
+//!                                  → sly plan --query "find large files"
+//!                                  → AI generates CommandPlan JSON
+//!                                  → Plugin parses JSON, replaces buffer
+//!                                  → User sees: find . -size +100M
+//! ```
+//!
+//! ## Usage
+//!
+//! ```zig
+//! const allocator = std.heap.page_allocator;
+//!
+//! // Load configuration from environment
+//! const config = try sly.loadConfigFromEnv(allocator);
+//! defer sly.freeConfig(allocator, config);
+//!
+//! // Generate a command plan
+//! const plan = try sly.generatePlan(allocator, "list all files", config, 3, null);
+//! defer plan.deinit();
+//!
+//! std.debug.print("Command: {s}\n", .{plan.command});
+//! ```
+//!
+//! ## Providers
+//!
+//! Supports multiple AI backends with automatic fallback:
+//! - **Anthropic**: Claude models (default, requires ANTHROPIC_API_KEY)
+//! - **OpenAI**: GPT models (requires OPENAI_API_KEY)
+//! - **Gemini**: Google's models (requires GEMINI_API_KEY)
+//! - **Ollama**: Local models (no API key, http://localhost:11434)
+//! - **Echo**: Debug provider that echoes input (for testing)
+//!
+//! ## Memory Management
+//!
+//! All functions that allocate memory document ownership:
+//! - Functions returning `[]u8` or `[]const u8` transfer ownership to caller
+//! - Config structs must be freed with `freeConfig()`
+//! - CommandPlan must be freed with `plan.deinit()`
 
 const std = @import("std");
 const ctx = @import("context.zig");
@@ -11,22 +62,52 @@ const command_planner = @import("command_planner.zig");
 const ghostty = @import("libghostty.zig");
 pub const terminal_runtime = @import("terminal_runtime.zig");
 
-/// Version information (set by build system)
+/// Semantic version of the sly binary, set at compile time by the build system.
+/// Format: "MAJOR.MINOR.PATCH" or "MAJOR.MINOR.PATCH-dev" for development builds.
 pub const version = build_options.version;
 
 // Re-export core types for convenience
+/// AI provider backend selection. See `providers.zig` for implementation details.
 pub const Provider = providers.Provider;
+
+/// Configuration for AI provider connections (API keys, model names, URLs).
 pub const Config = providers.Config;
+
+/// Structured command plan returned by AI, ready for shell execution.
+/// Contains command, arguments, environment, safety policies, and validation metadata.
 pub const CommandPlan = command_planner.CommandPlan;
+
+/// Result of command plan execution (success, failure, needs confirmation).
 pub const PlanOutcome = command_planner.PlanOutcome;
 
 // Shell integration scripts embedded at compile time
+/// Zsh plugin script for `# query` shell integration.
+/// Installs a preexec hook that intercepts lines starting with `#`.
 pub const zsh_plugin = @embedFile("sly.plugin.zsh");
+
+/// Bash plugin script for `# query` shell integration.
+/// Uses readline bindings to intercept comment-style queries.
 pub const bash_plugin = @embedFile("bash-sly.plugin.sh");
+
+/// Fish plugin script for `# query` shell integration.
+/// Uses fish's event system for command interception.
 pub const fish_plugin = @embedFile("sly.plugin.fish");
 
 /// Parse a provider name string into a Provider enum.
-/// Returns .anthropic as the default for unknown provider names.
+///
+/// Converts human-readable provider names (from CLI args or environment)
+/// into the Provider enum used internally.
+///
+/// Parameters:
+/// - `name`: Provider name string ("anthropic", "gemini", "openai", "ollama", "echo")
+///
+/// Returns: Corresponding Provider enum value, or `.anthropic` for unknown names.
+///
+/// Example:
+/// ```zig
+/// const provider = parseProvider("openai"); // Returns .openai
+/// const default = parseProvider("unknown"); // Returns .anthropic
+/// ```
 pub fn parseProvider(name: []const u8) Provider {
     if (std.mem.eql(u8, name, "anthropic")) return .anthropic;
     if (std.mem.eql(u8, name, "gemini")) return .gemini;
@@ -36,9 +117,23 @@ pub fn parseProvider(name: []const u8) Provider {
     return .anthropic;
 }
 
-/// Auto-detect provider based on available API keys.
-/// Priority: anthropic -> openai -> gemini -> ollama (fallback).
-/// Returns the provider to use.
+/// Auto-detect the best available AI provider based on environment.
+///
+/// Checks for explicit provider selection via SLY_PROVIDER, then falls back
+/// to detecting available API keys in priority order. This allows sly to
+/// work out-of-the-box with whatever credentials the user has configured.
+///
+/// Detection priority:
+/// 1. SLY_PROVIDER environment variable (explicit override)
+/// 2. ANTHROPIC_API_KEY present → .anthropic
+/// 3. OPENAI_API_KEY present → .openai
+/// 4. GEMINI_API_KEY present → .gemini
+/// 5. None found → .ollama (local, no key required)
+///
+/// Parameters:
+/// - `allocator`: Allocator for temporary string operations
+///
+/// Returns: Best available Provider enum value.
 pub fn autoDetectProvider(allocator: std.mem.Allocator) Provider {
     // Check if provider is explicitly set
     if (getEnvOpt(allocator, "SLY_PROVIDER")) |provider_env| {
@@ -67,21 +162,59 @@ pub fn autoDetectProvider(allocator: std.mem.Allocator) Provider {
     return .ollama;
 }
 
-/// Get an environment variable with a default fallback.
-/// The caller is responsible for freeing the returned string.
+/// Get an environment variable with a default fallback value.
+///
+/// Attempts to read the specified environment variable. If the variable
+/// is not set or an error occurs, returns a copy of the default value.
+///
+/// Parameters:
+/// - `allocator`: Allocator for the returned string
+/// - `key`: Environment variable name
+/// - `default_value`: Value to return if variable is not set
+///
+/// Returns: Owned copy of the variable value or default. Caller must free.
+///
+/// Errors:
+/// - `error.OutOfMemory`: Allocation failure
 pub fn getEnvOr(allocator: std.mem.Allocator, key: []const u8, default_value: []const u8) ![]const u8 {
     return std.process.getEnvVarOwned(allocator, key) catch try allocator.dupe(u8, default_value);
 }
 
-/// Get an environment variable, returning null if not set.
-/// The caller is responsible for freeing the returned string if non-null.
+/// Get an optional environment variable.
+///
+/// Attempts to read the specified environment variable, returning null
+/// if not set. Use this instead of getEnvOr when absence is meaningful.
+///
+/// Parameters:
+/// - `allocator`: Allocator for the returned string
+/// - `key`: Environment variable name
+///
+/// Returns: Owned copy of the variable value, or null if not set. Caller must free non-null result.
 pub fn getEnvOpt(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
     return std.process.getEnvVarOwned(allocator, key) catch null;
 }
 
 /// Format a terminal snapshot for inclusion in AI prompts.
-/// Returns a human-readable summary of the terminal state.
-/// Caller is responsible for freeing the returned string.
+///
+/// Converts the terminal state (visible content, cursor position, recent OSC events)
+/// into a human-readable summary suitable for providing context to the AI.
+/// This allows sly to understand what the user is currently looking at.
+///
+/// The output includes:
+/// - Terminal dimensions and cursor position
+/// - Last N non-empty lines of visible content (max 10)
+/// - Recent shell events (title changes, directory changes, prompt markers)
+///
+/// Privacy considerations:
+/// - Only includes safe OSC payloads (titles, PWD)
+/// - Excludes clipboard content and other sensitive data
+/// - Truncates long payloads to 100 characters
+///
+/// Parameters:
+/// - `allocator`: Allocator for the returned string
+/// - `snapshot`: Terminal state snapshot from TerminalRuntime
+///
+/// Returns: Owned formatted string. Caller must free.
 pub fn formatSnapshotForPrompt(allocator: std.mem.Allocator, snapshot: *const terminal_runtime.Snapshot) ![]u8 {
     var buf = std.ArrayList(u8){};
     errdefer buf.deinit(allocator);
@@ -180,8 +313,24 @@ pub fn formatSnapshotForPrompt(allocator: std.mem.Allocator, snapshot: *const te
     return buf.toOwnedSlice(allocator);
 }
 
-/// Build a system prompt with context and optional extensions.
-/// The caller is responsible for freeing the returned string.
+/// Build a complete system prompt for the AI provider.
+///
+/// Constructs the system prompt that instructs the AI how to generate
+/// CommandPlan JSON. Includes:
+/// - Base instructions for JSON-only output
+/// - CommandPlan schema documentation with field descriptions
+/// - Example request/response pairs
+/// - User's shell context (shell type, git status, project info)
+/// - Optional prompt extensions (SLY_PROMPT_EXTEND)
+/// - Optional terminal snapshot for visual context
+///
+/// Parameters:
+/// - `allocator`: Allocator for the returned string
+/// - `context`: Shell context string from context.buildContext()
+/// - `extend`: Optional additional instructions to append
+/// - `snapshot`: Optional terminal state for visual context
+///
+/// Returns: Owned system prompt string. Caller must free.
 pub fn buildSystemPrompt(
     allocator: std.mem.Allocator,
     context: []const u8,
@@ -260,8 +409,23 @@ pub fn buildSystemPrompt(
     return buf.toOwnedSlice(allocator);
 }
 
-/// Load configuration from environment variables.
-/// The caller is responsible for freeing the Config using freeConfig.
+/// Load AI provider configuration from environment variables.
+///
+/// Reads all relevant environment variables to construct a Config struct
+/// suitable for passing to generate() or generatePlan(). Auto-detects
+/// the best provider if not explicitly set.
+///
+/// Environment variables read:
+/// - SLY_PROVIDER: Force specific provider ("anthropic", "openai", etc.)
+/// - ANTHROPIC_API_KEY, SLY_ANTHROPIC_MODEL
+/// - OPENAI_API_KEY, SLY_OPENAI_MODEL, SLY_OPENAI_URL
+/// - GEMINI_API_KEY, SLY_GEMINI_MODEL
+/// - SLY_OLLAMA_MODEL, SLY_OLLAMA_URL
+///
+/// Parameters:
+/// - `allocator`: Allocator for config strings
+///
+/// Returns: Populated Config struct. Caller must free with freeConfig().
 pub fn loadConfigFromEnv(allocator: std.mem.Allocator) !Config {
     return Config{
         .provider = autoDetectProvider(allocator),
@@ -278,6 +442,13 @@ pub fn loadConfigFromEnv(allocator: std.mem.Allocator) !Config {
 }
 
 /// Free all allocated memory in a Config struct.
+///
+/// Must be called to release memory allocated by loadConfigFromEnv().
+/// After calling, the Config struct should not be used.
+///
+/// Parameters:
+/// - `allocator`: Same allocator used for loadConfigFromEnv()
+/// - `config`: Config struct to free
 pub fn freeConfig(allocator: std.mem.Allocator, config: Config) void {
     if (config.anthropic_key) |v| allocator.free(v);
     if (config.gemini_key) |v| allocator.free(v);
@@ -290,14 +461,19 @@ pub fn freeConfig(allocator: std.mem.Allocator, config: Config) void {
     allocator.free(config.ollama_url);
 }
 
-/// Generate a shell command from a natural language query.
+/// Validate that the configuration has required API keys for the selected provider.
 ///
-/// This is the main entry point for the sly API. It takes a query string and configuration,
-/// builds the necessary context and prompts, and returns the generated command.
+/// Checks that the necessary credentials are present and appear valid.
+/// Logs helpful error messages with instructions for obtaining keys.
 ///
-/// The caller is responsible for freeing the returned string.
-/// Validate that the configuration has the necessary API key for the selected provider.
-/// Returns an error with a helpful message if the key is missing or appears invalid.
+/// Parameters:
+/// - `config`: Configuration to validate
+///
+/// Returns: void on success
+///
+/// Errors:
+/// - `error.MissingApiKey`: Required API key environment variable not set
+/// - `error.InvalidApiKey`: API key appears malformed (too short)
 pub fn validateConfig(config: Config) !void {
     switch (config.provider) {
         .anthropic => {
@@ -345,10 +521,29 @@ pub fn validateConfig(config: Config) !void {
 
 /// Generate a shell command from a natural language query.
 ///
-/// This is the main entry point for the sly API. It takes a query string and configuration,
-/// builds the necessary context and prompts, and returns the generated command as a JSON string.
+/// This is the low-level entry point for command generation. Builds context,
+/// constructs the system prompt, queries the AI provider, and returns the
+/// raw response (expected to be CommandPlan JSON).
 ///
-/// The caller is responsible for freeing the returned string.
+/// For most use cases, prefer `generatePlan()` which adds validation and retries.
+///
+/// On network errors with non-echo providers, automatically falls back to the
+/// echo provider for graceful degradation (useful for testing/offline).
+///
+/// Parameters:
+/// - `allocator`: Allocator for the returned string
+/// - `query`: Natural language query (e.g., "list all files")
+/// - `config`: Provider configuration from loadConfigFromEnv()
+/// - `snapshot`: Optional terminal state for context
+///
+/// Returns: Raw AI response string (should be CommandPlan JSON). Caller must free.
+///
+/// Errors:
+/// - `error.MissingApiKey`: No API key for selected provider
+/// - `error.InvalidApiKey`: API key validation failed
+/// - `error.Network`: Network connection failed (after fallback attempt)
+/// - `error.Unavailable`: Provider service unavailable
+/// - `error.BadResponse`: Provider returned unparseable response
 pub fn generate(
     allocator: std.mem.Allocator,
     query: []const u8,
@@ -394,12 +589,25 @@ pub fn generate(
 
 /// Generate and validate a CommandPlan from a natural language query.
 ///
-/// This function calls generate() to get CommandPlan JSON from the provider,
-/// then parses and validates it against the CommandPlan schema. It retries
-/// up to max_retries times on validation errors.
+/// High-level API for command generation with validation and retry logic.
+/// Calls generate() to get JSON, then parses and validates against the
+/// CommandPlan schema. Retries on validation failures up to max_retries times.
 ///
-/// Returns a validated CommandPlan struct. The caller is responsible for
-/// freeing the plan using CommandPlan.deinit().
+/// This is the recommended API for shell integration, as it guarantees
+/// a valid, structured CommandPlan on success.
+///
+/// Parameters:
+/// - `allocator`: Allocator for the returned CommandPlan
+/// - `query`: Natural language query (e.g., "find all rust files")
+/// - `config`: Provider configuration from loadConfigFromEnv()
+/// - `max_retries`: Number of attempts before giving up (typically 3)
+/// - `snapshot`: Optional terminal state for context
+///
+/// Returns: Validated CommandPlan struct. Caller must free with plan.deinit().
+///
+/// Errors:
+/// - `error.ValidationFailed`: Could not generate valid JSON after max_retries
+/// - All errors from generate()
 pub fn generatePlan(
     allocator: std.mem.Allocator,
     query: []const u8,
@@ -436,13 +644,39 @@ pub fn generatePlan(
     return error.ValidationFailed;
 }
 
-/// Shell types supported for integration
+/// Shell types supported for integration.
+///
+/// Represents the shells that sly can integrate with via plugin scripts.
+/// Each shell has a different mechanism for intercepting `# query` lines
+/// and replacing the command buffer with generated commands.
+///
+/// ## Detection
+/// Use `detectShell()` to automatically determine the current shell from $SHELL.
+///
+/// ## Integration
+/// Use `installShellIntegration()` to install the appropriate plugin.
 pub const ShellType = enum {
+    /// GNU Bash - Uses readline bindings and PROMPT_COMMAND.
     bash,
+
+    /// Zsh - Uses preexec hooks and zle widgets.
     zsh,
+
+    /// Fish - Uses event handlers and commandline builtin.
     fish,
+
+    /// Unknown or unsupported shell.
     unknown,
 
+    /// Parse a shell path or name into a ShellType.
+    ///
+    /// Extracts the basename from shell paths (e.g., "/bin/zsh" → "zsh")
+    /// and maps to the corresponding enum value.
+    ///
+    /// Parameters:
+    /// - `s`: Shell path or name string
+    ///
+    /// Returns: Corresponding ShellType, or .unknown if not recognized.
     pub fn fromString(s: []const u8) ShellType {
         const basename = std.fs.path.basename(s);
         if (std.mem.eql(u8, basename, "zsh")) return .zsh;
@@ -451,6 +685,10 @@ pub const ShellType = enum {
         return .unknown;
     }
 
+    /// Convert ShellType to its string name.
+    ///
+    /// Returns the canonical name of the shell, suitable for display
+    /// or use in file paths.
     pub fn toString(self: ShellType) []const u8 {
         return switch (self) {
             .bash => "bash",
@@ -460,6 +698,12 @@ pub const ShellType = enum {
         };
     }
 
+    /// Get the RC file path relative to home directory.
+    ///
+    /// Returns the configuration file where shell initialization
+    /// commands should be added for this shell type.
+    ///
+    /// Returns: Relative path from $HOME, or empty string for unknown.
     pub fn rcFile(self: ShellType) []const u8 {
         return switch (self) {
             .bash => ".bashrc",
@@ -469,6 +713,12 @@ pub const ShellType = enum {
         };
     }
 
+    /// Get the embedded plugin script content for this shell.
+    ///
+    /// Returns the compile-time embedded plugin script that implements
+    /// the `# query` integration for this shell type.
+    ///
+    /// Returns: Plugin script content, or empty string for unknown.
     pub fn pluginContent(self: ShellType) []const u8 {
         return switch (self) {
             .bash => bash_plugin,
@@ -479,7 +729,16 @@ pub const ShellType = enum {
     }
 };
 
-/// Detect the current shell from environment
+/// Detect the current shell from the SHELL environment variable.
+///
+/// Reads $SHELL and parses it to determine which shell is in use.
+/// This is the user's login shell, which may differ from the shell
+/// running the current process.
+///
+/// Parameters:
+/// - `allocator`: Allocator for temporary string operations
+///
+/// Returns: Detected ShellType, or .unknown if detection fails.
 pub fn detectShell(allocator: std.mem.Allocator) ShellType {
     const shell_path = getEnvOpt(allocator, "SHELL") orelse return .unknown;
     defer allocator.free(shell_path);
@@ -487,7 +746,26 @@ pub fn detectShell(allocator: std.mem.Allocator) ShellType {
     return ShellType.fromString(shell_path);
 }
 
-/// Install shell integration for the specified shell type
+/// Install shell integration for the specified shell type.
+///
+/// Creates the plugin file in ~/.config/sly/ and optionally adds a source
+/// line to the shell's RC file. After installation, users can restart their
+/// shell or source the RC file to enable `# query` integration.
+///
+/// Installation steps:
+/// 1. Create ~/.config/sly/ directory
+/// 2. Write plugin file (e.g., sly.plugin.zsh)
+/// 3. If auto_source: Add source line to RC file (if not already present)
+///
+/// Parameters:
+/// - `allocator`: Allocator for path operations
+/// - `shell`: Target shell type
+/// - `auto_source`: If true, add source line to RC file
+///
+/// Errors:
+/// - `error.UnsupportedShell`: Shell type is .unknown
+/// - `error.NoHomeDir`: HOME environment variable not set
+/// - File system errors from directory/file creation
 pub fn installShellIntegration(allocator: std.mem.Allocator, shell: ShellType, auto_source: bool) !void {
     if (shell == .unknown) return error.UnsupportedShell;
 

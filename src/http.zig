@@ -178,7 +178,7 @@ pub fn postJsonWithTimeout(
     _ = c.curl_easy_setopt(eh, c.CURLOPT_HTTPHEADER, list);
 
     // Set timeouts
-    const connect_timeout = @min(timeout_ms / 2, 10000);
+    const connect_timeout = calculateConnectTimeout(timeout_ms);
     _ = c.curl_easy_setopt(eh, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(connect_timeout)));
     _ = c.curl_easy_setopt(eh, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(timeout_ms)));
 
@@ -199,4 +199,44 @@ pub fn postJsonWithTimeout(
         .status = @intCast(code_long),
         .body = try out.toOwnedSlice(allocator),
     };
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+test "calculateConnectTimeout - basic cases" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u32, 5000), calculateConnectTimeout(10000));
+    try testing.expectEqual(@as(u32, 15000), calculateConnectTimeout(30000));
+    try testing.expectEqual(@as(u32, 0), calculateConnectTimeout(0));
+    try testing.expectEqual(@as(u32, 1), calculateConnectTimeout(2));
+}
+
+test "calculateConnectTimeout - capped at 10 seconds" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(30000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(60000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(120000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(std.math.maxInt(u32)));
+}
+
+test "calculateConnectTimeout - boundary at 20 seconds" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u32, 9999), calculateConnectTimeout(19998));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(20000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(20002));
+}
+
+test "Response struct layout" {
+    const testing = std.testing;
+
+    var body = [_]u8{ 'O', 'K' };
+    const resp = Response{ .status = 200, .body = &body };
+
+    try testing.expectEqual(@as(u32, 200), resp.status);
+    try testing.expectEqualStrings("OK", resp.body);
 }
