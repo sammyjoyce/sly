@@ -1,0 +1,460 @@
+# Key Encoding Specification
+
+## Overview
+
+Key encoding converts keyboard input events into terminal escape sequences. sly uses libghostty-vt's key encoding API to generate sequences compatible with modern terminal protocols, including the Kitty Keyboard Protocol.
+
+## libghostty Key Encoding API
+
+### Core Components
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Key Encoding Pipeline                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Key Event           Key Encoder          Escape Sequence       │
+│  ┌─────────┐         ┌─────────┐          ┌─────────────────┐   │
+│  │ key: 'a'│   ──►   │ Options │   ──►    │ ESC[97u or 'a'  │   │
+│  │ mods: 0 │         │ Kitty   │          │                 │   │
+│  │ action  │         │ flags   │          └─────────────────┘   │
+│  └─────────┘         └─────────┘                                 │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Encoder Lifecycle
+
+```zig
+// 1. Create encoder
+var encoder: GhosttyKeyEncoder = undefined;
+const result = ghostty_key_encoder_new(allocator, &encoder);
+
+// 2. Configure options
+var kitty_flags: u8 = GHOSTTY_KITTY_KEY_ALL;
+ghostty_key_encoder_setopt(encoder, GHOSTTY_KEY_ENCODER_OPT_KITTY_FLAGS, &kitty_flags);
+
+// 3. Encode key events
+var event: GhosttyKeyEvent = undefined;
+ghostty_key_event_new(allocator, &event);
+ghostty_key_event_set_action(event, GHOSTTY_KEY_ACTION_PRESS);
+ghostty_key_event_set_key(event, GHOSTTY_KEY_A);
+ghostty_key_event_set_mods(event, GHOSTTY_MODS_CTRL);
+
+var buf: [128]u8 = undefined;
+var written: usize = 0;
+ghostty_key_encoder_encode(encoder, event, &buf, buf.len, &written);
+
+// 4. Free resources
+ghostty_key_event_free(event);
+ghostty_key_encoder_free(encoder);
+```
+
+## Key Actions
+
+### Action Types
+
+| Action | Value | Description |
+|--------|-------|-------------|
+| `GHOSTTY_KEY_ACTION_RELEASE` | 0 | Key was released |
+| `GHOSTTY_KEY_ACTION_PRESS` | 1 | Key was pressed |
+| `GHOSTTY_KEY_ACTION_REPEAT` | 2 | Key is being held (auto-repeat) |
+
+### Action Encoding
+
+With Kitty protocol enabled, actions are encoded in the escape sequence:
+
+```
+Press:   ESC[<key>u      or  ESC[<key>;1u
+Repeat:  ESC[<key>;1:2u
+Release: ESC[<key>;1:3u
+```
+
+## Modifier Keys
+
+### Modifier Bitmask
+
+```zig
+GHOSTTY_MODS_SHIFT      = 1 << 0;  // 0x01
+GHOSTTY_MODS_CTRL       = 1 << 1;  // 0x02
+GHOSTTY_MODS_ALT        = 1 << 2;  // 0x04
+GHOSTTY_MODS_SUPER      = 1 << 3;  // 0x08
+GHOSTTY_MODS_CAPS_LOCK  = 1 << 4;  // 0x10
+GHOSTTY_MODS_NUM_LOCK   = 1 << 5;  // 0x20
+
+// Side detection (only meaningful when base modifier is set)
+GHOSTTY_MODS_SHIFT_SIDE = 1 << 6;  // 0 = left, 1 = right
+GHOSTTY_MODS_CTRL_SIDE  = 1 << 7;
+GHOSTTY_MODS_ALT_SIDE   = 1 << 8;
+GHOSTTY_MODS_SUPER_SIDE = 1 << 9;
+```
+
+### Modifier Encoding
+
+Modifiers are encoded as parameter 2 in CSI sequences:
+
+```
+Shift:       1
+Alt:         2
+Shift+Alt:   3
+Ctrl:        4
+Shift+Ctrl:  5
+Alt+Ctrl:    6
+...
+```
+
+Formula: `1 + (shift) + (alt << 1) + (ctrl << 2) + (super << 3)`
+
+### Examples
+
+| Key Combo | Modifier Value | Encoded |
+|-----------|----------------|---------|
+| `a` | 0 | `a` or `ESC[97u` |
+| `Shift+A` | 1 | `A` or `ESC[65;2u` |
+| `Ctrl+C` | MODS_CTRL (2) | `^C` (0x03) or `ESC[99;5u` |
+| `Alt+Tab` | MODS_ALT (4) | `ESC[9;3u` |
+| `Ctrl+Shift+P` | 5 | `ESC[112;6u` |
+
+## Kitty Keyboard Protocol
+
+### Protocol Flags
+
+```zig
+GHOSTTY_KITTY_KEY_DISABLED          = 0;      // Legacy encoding only
+GHOSTTY_KITTY_KEY_DISAMBIGUATE      = 1 << 0; // Distinguish Ctrl+I from Tab
+GHOSTTY_KITTY_KEY_REPORT_EVENTS     = 1 << 1; // Report press/release/repeat
+GHOSTTY_KITTY_KEY_REPORT_ALTERNATES = 1 << 2; // Report alternate key codes
+GHOSTTY_KITTY_KEY_REPORT_ALL        = 1 << 3; // Report all key events
+GHOSTTY_KITTY_KEY_REPORT_ASSOCIATED = 1 << 4; // Report associated text
+GHOSTTY_KITTY_KEY_ALL               = 0x1F;   // All flags enabled
+```
+
+### Flag Behaviors
+
+#### DISAMBIGUATE (Flag 1)
+
+Disambiguates keys that traditionally produce the same sequence:
+
+| Keys | Legacy | With Flag |
+|------|--------|-----------|
+| Tab | `0x09` | `ESC[9u` |
+| Ctrl+I | `0x09` | `ESC[105;5u` |
+| Enter | `0x0D` | `ESC[13u` |
+| Ctrl+M | `0x0D` | `ESC[109;5u` |
+
+#### REPORT_EVENTS (Flag 2)
+
+Enables reporting of key release and repeat:
+
+```
+Press:   ESC[97;1:1u
+Repeat:  ESC[97;1:2u
+Release: ESC[97;1:3u
+```
+
+#### REPORT_ALTERNATES (Flag 4)
+
+Reports alternate key representations:
+
+```
+ESC[<base-key>;<mods>:<event>;<alternate-key>u
+```
+
+#### REPORT_ALL (Flag 8)
+
+Reports keys normally handled by the terminal:
+
+- Function keys
+- Navigation keys
+- Modifier-only presses
+
+#### REPORT_ASSOCIATED (Flag 16)
+
+Reports text generated by the key:
+
+```
+ESC[97;1u a        (key 'a' with associated text 'a')
+ESC[65;2u A        (Shift+a with associated text 'A')
+```
+
+## Encoder Options
+
+### Option Types
+
+```zig
+pub const KeyEncoderOption = enum {
+    CURSOR_KEY_APPLICATION,     // DEC mode 1: cursor keys
+    KEYPAD_KEY_APPLICATION,     // DEC mode 66: keypad keys
+    IGNORE_KEYPAD_WITH_NUMLOCK, // DEC mode 1035
+    ALT_ESC_PREFIX,             // DEC mode 1036: Alt sends ESC
+    MODIFY_OTHER_KEYS_STATE_2,  // xterm modifyOtherKeys
+    KITTY_FLAGS,                // Kitty protocol flags
+    MACOS_OPTION_AS_ALT,        // macOS Option key behavior
+};
+```
+
+### Cursor Key Application Mode
+
+```
+Normal Mode:    Arrow keys send ESC[A, ESC[B, ESC[C, ESC[D
+Application:    Arrow keys send ESCOA, ESCOB, ESCOC, ESCOD
+```
+
+### Alt ESC Prefix
+
+```
+Without: Alt+A sends character with high bit set (0x80 | 0x61)
+With:    Alt+A sends ESC followed by 'a' (0x1B 0x61)
+```
+
+### macOS Option as Alt
+
+```zig
+pub const OptionAsAlt = enum {
+    FALSE,  // Option key produces special characters
+    TRUE,   // Option key acts as Alt
+    LEFT,   // Only left Option acts as Alt
+    RIGHT,  // Only right Option acts as Alt
+};
+```
+
+## Key Code Mapping
+
+### Physical Key Codes
+
+libghostty uses physical key codes based on the W3C UI Events standard:
+
+```zig
+// Letter keys
+GHOSTTY_KEY_A = 0x04,
+GHOSTTY_KEY_B = 0x05,
+...
+GHOSTTY_KEY_Z = 0x1D,
+
+// Number keys
+GHOSTTY_KEY_1 = 0x1E,
+...
+GHOSTTY_KEY_0 = 0x27,
+
+// Function keys
+GHOSTTY_KEY_F1 = 0x3A,
+...
+GHOSTTY_KEY_F12 = 0x45,
+
+// Special keys
+GHOSTTY_KEY_ESCAPE = 0x29,
+GHOSTTY_KEY_RETURN = 0x28,
+GHOSTTY_KEY_TAB = 0x2B,
+GHOSTTY_KEY_BACKSPACE = 0x2A,
+GHOSTTY_KEY_SPACE = 0x2C,
+```
+
+### Unicode Codepoint Support
+
+For keys that generate text, the encoder can use:
+
+```zig
+// Set UTF-8 text generated by key
+ghostty_key_event_set_utf8(event, "ñ", 2);
+
+// Set unshifted codepoint (for reporting)
+ghostty_key_event_set_unshifted_codepoint(event, 0x006E); // 'n'
+```
+
+## Terminal Runtime Integration
+
+### Key Injection Method
+
+```zig
+pub fn injectKey(
+    self: *TerminalRuntime,
+    action: KeyAction,
+    key: u8,
+    mods: KeyMods,
+) ![]const u8 {
+    // Create key event
+    var event: KeyEvent = null;
+    const event_result = ghostty.key_event_new(null, &event);
+    if (!ghostty.isSuccess(event_result)) {
+        return error.KeyEventCreationFailed;
+    }
+    defer ghostty.key_event_free(event);
+
+    // Configure event
+    ghostty.key_event_set_action(event, action);
+    ghostty.key_event_set_key(event, key);
+    ghostty.key_event_set_mods(event, mods);
+
+    // Encode
+    var buf: [128]u8 = undefined;
+    var written: usize = 0;
+    const encode_result = ghostty.key_encoder_encode(
+        self.key_encoder,
+        event,
+        &buf,
+        buf.len,
+        &written,
+    );
+
+    if (!ghostty.isSuccess(encode_result)) {
+        return error.KeyEncodingFailed;
+    }
+
+    // Return owned copy
+    return self.allocator.dupe(u8, buf[0..written]);
+}
+```
+
+### Runtime Configuration
+
+```zig
+pub const KeyEncoderOptions = struct {
+    cursor_key_application: ?bool = null,
+    keypad_key_application: ?bool = null,
+    ignore_keypad_with_numlock: ?bool = null,
+    alt_esc_prefix: ?bool = null,
+    modify_other_keys_state_2: ?bool = null,
+    macos_option_as_alt: ?bool = null,
+    kitty_flags: ?KittyKeyFlags = null,
+};
+
+pub fn setKeyEncoderOptions(self: *TerminalRuntime, options: KeyEncoderOptions) void {
+    if (options.cursor_key_application) |value| {
+        var val = value;
+        ghostty.key_encoder_setopt(
+            self.key_encoder,
+            ghostty.KEY_ENCODER_OPT_CURSOR_KEY_APPLICATION,
+            &val,
+        );
+    }
+    // ... other options
+}
+```
+
+## Common Encoding Patterns
+
+### Text Input
+
+For injecting text (e.g., generated commands):
+
+```zig
+pub fn injectText(self: *TerminalRuntime, text: []const u8) ![]const u8 {
+    var result = std.ArrayList(u8).init(self.allocator);
+    errdefer result.deinit();
+
+    for (text) |char| {
+        const encoded = try self.injectKey(
+            ghostty.KEY_ACTION_PRESS,
+            char,
+            0,  // No modifiers
+        );
+        defer self.allocator.free(encoded);
+        try result.appendSlice(encoded);
+    }
+
+    return result.toOwnedSlice();
+}
+```
+
+### Special Key Sequences
+
+| Action | Key | Mods | Result |
+|--------|-----|------|--------|
+| Submit command | Enter | 0 | `\r` or `ESC[13u` |
+| Cancel | C | CTRL | `^C` or `ESC[99;5u` |
+| Clear screen | L | CTRL | `^L` or `ESC[108;5u` |
+| Previous word | Left | ALT | `ESC[1;3D` |
+| Delete word | Backspace | CTRL | `^W` or `ESC[127;5u` |
+
+## Encoding Examples
+
+### Simple Character
+
+```
+Input:  key='a', mods=0, action=PRESS
+Legacy: 'a' (0x61)
+Kitty:  ESC[97u
+```
+
+### Modified Character
+
+```
+Input:  key='a', mods=CTRL, action=PRESS
+Legacy: ^A (0x01)
+Kitty:  ESC[97;5u
+```
+
+### Function Key
+
+```
+Input:  key=F1, mods=0, action=PRESS
+Legacy: ESC[11~ or ESCOP
+Kitty:  ESC[1Pu or ESC[57344u
+```
+
+### Arrow Key with Modifiers
+
+```
+Input:  key=UP, mods=SHIFT|CTRL, action=PRESS
+Legacy: ESC[1;6A
+Kitty:  ESC[1;6:1u (with REPORT_EVENTS)
+```
+
+## Buffer Management
+
+### Dynamic Buffer Sizing
+
+```zig
+// First call: query required size
+var required: usize = 0;
+const result = ghostty_key_encoder_encode(encoder, event, null, 0, &required);
+// result == GHOSTTY_OUT_OF_MEMORY, required contains needed size
+
+// Allocate and encode
+var buf = try allocator.alloc(u8, required);
+defer allocator.free(buf);
+ghostty_key_encoder_encode(encoder, event, buf.ptr, buf.len, &written);
+```
+
+### Static Buffer (Typical)
+
+```zig
+// Most sequences fit in 128 bytes
+var buf: [128]u8 = undefined;
+var written: usize = 0;
+const result = ghostty_key_encoder_encode(encoder, event, &buf, buf.len, &written);
+if (result == GHOSTTY_OUT_OF_MEMORY) {
+    // Fallback to dynamic allocation
+}
+```
+
+## Error Handling
+
+### Encoder Errors
+
+| Result | Meaning | Recovery |
+|--------|---------|----------|
+| `GHOSTTY_SUCCESS` | Encoding succeeded | Use output |
+| `GHOSTTY_OUT_OF_MEMORY` | Buffer too small | Allocate larger buffer |
+| `GHOSTTY_INVALID_VALUE` | Invalid input | Check key/event values |
+
+### Zero-Length Output
+
+Some key events don't produce output:
+
+```zig
+// Modifier-only press (Shift alone) may produce no output
+if (written == 0) {
+    // No sequence to send
+    return &[_]u8{};
+}
+```
+
+### Traditional vs Kitty
+
+```zig
+// Ctrl+C with legacy encoding
+// Returns empty (0 bytes) - traditional ASCII 0x03 sent directly
+// Ctrl+C with Kitty protocol
+// Returns ESC[99;5u
+```

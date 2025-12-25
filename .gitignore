@@ -9,3 +9,7 @@ zig-cache/
 *~
 .DS_Store
 result
+
+# direnv
+.direnv/
+.envrc.local

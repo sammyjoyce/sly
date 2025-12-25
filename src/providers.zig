@@ -208,6 +208,9 @@ fn ollamaPayload(alloc: std.mem.Allocator, model: []const u8, sys: []const u8, u
     , .{ model, u, s });
 }
 
+/// Query a provider for a CommandPlan JSON.
+/// Returns the CommandPlan JSON string extracted from the provider's response.
+/// The caller is responsible for freeing the returned string.
 pub fn query(
     allocator: std.mem.Allocator,
     cfg: Config,
@@ -215,7 +218,11 @@ pub fn query(
     system_prompt: []const u8,
 ) ![]u8 {
     if (cfg.provider == .echo) {
-        return std.fmt.allocPrint(allocator, "echo '{s}'", .{query_text});
+        // Echo provider returns a minimal valid CommandPlan JSON
+        const timestamp = std.time.milliTimestamp();
+        return std.fmt.allocPrint(allocator,
+            \\{{"plan_id":"echo-{d}","command":"echo","args":["{s}"],"env":{{}},"stdin":null,"paste_policy":"auto","confirm_mode":"auto","expectations":[],"failure_signals":[],"created_at":{d}}}
+        , .{ timestamp, query_text, timestamp });
     }
 
     const resp: http.Response = switch (cfg.provider) {
@@ -256,20 +263,37 @@ pub fn query(
 
     defer allocator.free(resp.body);
 
+    // Extract the text response which should contain CommandPlan JSON
     const val: ?[]u8 = switch (cfg.provider) {
         .anthropic => extractFirstStringAfter(allocator, resp.body, "text"),
         .gemini => extractFirstStringAfter(allocator, resp.body, "text"),
-        .openai => extractFirstStringAfter(allocator, resp.body, "output_text"),
+        .openai => extractFirstStringAfter(allocator, resp.body, "output"),
         .ollama => extractFirstStringAfter(allocator, resp.body, "response"),
         .echo => null,
     };
 
-    if (val) |vraw| {
-        defer allocator.free(vraw);
-        var oneline = try allocator.dupe(u8, vraw);
-        const trimmed = trimSingleLineInPlace(oneline);
-        // oneline is now trimmed - return it without re-duping
-        return oneline[0..trimmed.len];
+    if (val) |plan_json| {
+        // The extracted text should be the CommandPlan JSON - return it directly
+        // Note: We trim whitespace but keep it as JSON (may be multi-line)
+        var trimmed = std.mem.trim(u8, plan_json, " \t\n\r");
+
+        // Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+        if (std.mem.startsWith(u8, trimmed, "```json")) {
+            trimmed = trimmed[7..]; // Skip "```json"
+            trimmed = std.mem.trim(u8, trimmed, " \t\n\r");
+        } else if (std.mem.startsWith(u8, trimmed, "```")) {
+            trimmed = trimmed[3..]; // Skip "```"
+            trimmed = std.mem.trim(u8, trimmed, " \t\n\r");
+        }
+
+        if (std.mem.endsWith(u8, trimmed, "```")) {
+            trimmed = trimmed[0 .. trimmed.len - 3];
+            trimmed = std.mem.trim(u8, trimmed, " \t\n\r");
+        }
+
+        const result = try allocator.dupe(u8, trimmed);
+        allocator.free(plan_json);
+        return result;
     }
 
     if (extractFirstStringAfter(allocator, resp.body, "message")) |emsg| {
