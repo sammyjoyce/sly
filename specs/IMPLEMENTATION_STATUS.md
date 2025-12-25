@@ -373,23 +373,37 @@ zig build test-ghostty   # Run libghostty integration tests
 
 ## Testing Status
 
-### ✅ Implemented Tests
-- Terminal runtime initialization
-- Terminal resize functionality
-- Key encoder creation and configuration
-- Kitty keyboard protocol enablement
-- Key event encoding (Enter, Ctrl+C)
-- Result code handling
+### ✅ Implemented Tests (34+ tests across 3 modules)
+
+**terminal_runtime.zig (17 tests):**
+- Terminal runtime initialization and resize
+- SGR parser - bold and red foreground
+- OSC parser - window title change
+- Paste safety tests (4 tests: safe/unsafe/empty/special chars)
+- Key encoder tests (4 tests: basic/modifiers/Alt/cursor mode)
+- feedBytes tests (5 tests including SGR, OSC, snapshot generation)
+
+**policy_engine.zig (11 tests):**
+- Allow/confirm/reject title changes
+- Hyperlink confirmation
+- Clipboard read/write confirmation
+- Shell integration allow
+- Unknown command default policy
+- Paste safe/unsafe text
+- Statistics tracking
+
+**command_planner.zig (6 tests):**
+- CommandPlan JSON parsing
+- Build command string
+- Execute simple plan
+- Blocked plan
+- Snapshot comparison with expectations
+- Snapshot comparison with failure signals
 
 ### ⏳ Pending Tests
-- SGR parser tests
-- OSC parser tests
-- Paste safety validation
-- Golden PTY replay tests
-- Snapshot hash verification
-- Property-based fuzzing
-- Integration with command planner
-- UX flow tests
+- Golden PTY replay tests (requires recorded terminal sessions)
+- Property-based fuzzing (stress testing with random inputs)
+- UX flow tests (end-to-end shell integration testing)
 
 ## Documentation Status
 
