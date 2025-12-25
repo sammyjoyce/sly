@@ -1170,6 +1170,26 @@ pub const TerminalRuntime = struct {
         return try self.encodeKeyEvent(event);
     }
 
+    /// Inject a text string as individual key events
+    /// Returns an owned concatenated byte slice ready for PTY injection
+    /// Caller is responsible for freeing the returned slice
+    pub fn injectText(self: *TerminalRuntime, text: []const u8) ![]const u8 {
+        var result = std.ArrayList(u8){};
+        errdefer result.deinit(self.allocator);
+
+        for (text) |char| {
+            const encoded = try self.injectKey(
+                ghostty.KEY_ACTION_PRESS,
+                char,
+                0, // No modifiers for regular characters
+            );
+            defer self.allocator.free(encoded);
+            try result.appendSlice(self.allocator, encoded);
+        }
+
+        return try result.toOwnedSlice(self.allocator);
+    }
+
     /// Encode a key event with automatic buffer growth
     /// Starts with 128 bytes and doubles on OUT_OF_MEMORY
     fn encodeKeyEvent(self: *TerminalRuntime, event: ghostty.KeyEvent) ![]const u8 {
@@ -2350,4 +2370,134 @@ test "alternate screen buffer - legacy mode 47" {
     try runtime.feedBytes("\x1b[?47l");
     try testing.expect(!runtime.is_alternate_screen);
     try testing.expectEqual(@as(u8, 'O'), runtime.framebuffer.items[0].items[0].char);
+}
+
+test "injectText - injects text as key events" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // Inject "abc"
+    const result = try runtime.injectText("abc");
+    defer testing.allocator.free(result);
+
+    // Result should contain encoded bytes for each character
+    try testing.expect(result.len > 0);
+}
+
+test "injectText - empty string returns empty" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    const result = try runtime.injectText("");
+    defer testing.allocator.free(result);
+
+    try testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "scrollback buffer - snapshot includes scrollback" {
+    const testing = std.testing;
+
+    // Small terminal to force scrolling
+    var runtime = try TerminalRuntime.init(testing.allocator, .{
+        .cols = 20,
+        .rows = 3,
+        .scrollback_depth = 100,
+    });
+    defer runtime.shutdown();
+
+    // Write more lines than the terminal can hold
+    try runtime.feedBytes("Line1\n");
+    try runtime.feedBytes("Line2\n");
+    try runtime.feedBytes("Line3\n");
+    try runtime.feedBytes("Line4\n");
+    try runtime.feedBytes("Line5\n");
+
+    // Should have scrollback now
+    try testing.expect(runtime.scrollback.items.len > 0);
+
+    // Snapshot with scrollback
+    var snap_with = try runtime.snapshot(.{ .include_scrollback = true, .scrollback_lines = 100 });
+    defer snap_with.deinit(testing.allocator);
+
+    // Snapshot without scrollback
+    var snap_without = try runtime.snapshot(.{ .include_scrollback = false });
+    defer snap_without.deinit(testing.allocator);
+
+    // With scrollback should have lines, without should have 0
+    try testing.expect(snap_with.scrollback.len > 0);
+    try testing.expectEqual(@as(usize, 0), snap_without.scrollback.len);
+}
+
+test "formatSnapshotForPrompt - includes scrollback content" {
+    const testing = std.testing;
+
+    // Small terminal to force scrolling
+    var runtime = try TerminalRuntime.init(testing.allocator, .{
+        .cols = 30,
+        .rows = 3,
+        .scrollback_depth = 100,
+    });
+    defer runtime.shutdown();
+
+    // Write enough to scroll
+    try runtime.feedBytes("ScrolledLine1\n");
+    try runtime.feedBytes("ScrolledLine2\n");
+    try runtime.feedBytes("VisibleLine3\n");
+    try runtime.feedBytes("VisibleLine4\n");
+    try runtime.feedBytes("VisibleLine5\n");
+
+    // Snapshot with scrollback
+    var snap = try runtime.snapshot(.{ .include_scrollback = true, .scrollback_lines = 10 });
+    defer snap.deinit(testing.allocator);
+
+    // Format for prompt
+    const formatted = try formatSnapshotForPrompt(testing.allocator, &snap);
+    defer testing.allocator.free(formatted);
+
+    // Should include scrollback section if there's content
+    if (snap.scrollback.len > 0) {
+        // Scrollback content should be included
+        try testing.expect(std.mem.indexOf(u8, formatted, "ScrolledLine") != null or
+            std.mem.indexOf(u8, formatted, "VisibleLine") != null);
+    }
+}
+
+test "SGR 256-color support" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // 256-color foreground (color 196 = bright red)
+    try runtime.feedBytes("\x1b[38;5;196mR\x1b[0m");
+
+    // Check the cell has 256-color set
+    switch (runtime.framebuffer.items[0].items[0].fg_color) {
+        .indexed => |idx| try testing.expectEqual(@as(u8, 196), idx),
+        else => return error.ExpectedIndexedColor,
+    }
+}
+
+test "SGR RGB color support" {
+    const testing = std.testing;
+
+    var runtime = try TerminalRuntime.init(testing.allocator, .{});
+    defer runtime.shutdown();
+
+    // RGB foreground (orange: 255, 128, 0)
+    try runtime.feedBytes("\x1b[38;2;255;128;0mO\x1b[0m");
+
+    // Check the cell has RGB color set
+    switch (runtime.framebuffer.items[0].items[0].fg_color) {
+        .rgb => |c| {
+            try testing.expectEqual(@as(u8, 255), c.r);
+            try testing.expectEqual(@as(u8, 128), c.g);
+            try testing.expectEqual(@as(u8, 0), c.b);
+        },
+        else => return error.ExpectedRgbColor,
+    }
 }

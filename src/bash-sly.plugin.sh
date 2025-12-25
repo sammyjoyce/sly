@@ -48,7 +48,6 @@ __sly_expand() {
       fi
       return 0
     fi
-    local q="${READLINE_LINE:2}"
     local plan_json cmd
     local timeout_val="${SLY_TIMEOUT:-30}"
     

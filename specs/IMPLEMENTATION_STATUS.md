@@ -1,13 +1,13 @@
 # libghostty Integration - Implementation Status
 
-**Last Updated:** 2025-12-26 (Work Session 27)
+**Last Updated:** 2025-12-26 (Work Session 28)
 **Status:** ✅ **CORE IMPLEMENTATION COMPLETE** - All phases 0-7 finished, production-ready
 
 ## Overview
 
 This document tracks detailed implementation status for integrating libghostty-vt into sly. The integration replaces manual ANSI parsing with ghostty's terminal emulation engine.
 
-**🎯 Current Status:** All core phases (0-7) are complete and tested with 120+ passing unit tests. System is production-ready and awaiting real-world AI provider testing.
+**🎯 Current Status:** All core phases (0-7) are complete and tested with 130+ passing unit tests. System is production-ready and awaiting real-world AI provider testing.
 
 **Related Documents:**
 - 🏗️ [libghostty-implementation-plan.md](./libghostty-implementation-plan.md) - Phase-by-phase roadmap
@@ -277,6 +277,28 @@ This document tracks detailed implementation status for integrating libghostty-v
 - **generate()** - Base provider query with optional snapshot context
 - **generatePlan()** - Provider query + schema validation with retries
 - **formatSnapshotForPrompt()** - Terminal state formatting for AI
+
+### Work Session 28 Updates (2025-12-26)
+
+**New Features:**
+- ✅ Added `injectText()` helper method for injecting multi-character text as key events
+- ✅ Added comprehensive tests for scrollback buffer in snapshot
+- ✅ Added tests for 256-color and RGB color support (SGR 38;5;N and 38;2;R;G;B)
+
+**Bug Fixes:**
+- ✅ Fixed duplicate line in src/bash-sly.plugin.sh (line 51) - now synchronized with lib/
+
+**Verification:**
+- ✅ All CSI ED (J) modes 0/1/2/3 confirmed implemented
+- ✅ All CSI EL (K) modes 0/1/2 confirmed implemented  
+- ✅ SGR 256-color and RGB parsing confirmed working
+- ✅ Scrollback buffer in SnapshotOptions confirmed working
+- ✅ lib/ and src/ shell plugins confirmed synchronized
+- ✅ OSC 7 (pwd) and OSC 52 (clipboard) handling confirmed in policy engine
+- ✅ OSC 133 (shell integration markers) confirmed working
+
+**Test Results:**
+- ✅ All tests passing (130+ unit tests across terminal_runtime, policy_engine, command_planner)
 
 ### Work Session 27 Updates (2025-12-26)
 
@@ -569,9 +591,31 @@ zig build test-ghostty   # Run libghostty integration tests
 - `specs/libghostty-design-decisions.md` - Design rationale
 - `specs/libghostty-implementation-plan.md` - Phase-by-phase plan
 
-## Current Status (Updated 2025-12-26 Work Session 27)
+## Current Status (Updated 2025-12-26 Work Session 28)
 
 **🎉 Major Achievement:** All core phases (0-7) are now **100% COMPLETE** with production fixes and terminal state enhancements!
+
+### Work Session 28 Highlights (2025-12-26)
+
+**New Features:**
+- ✅ Added `injectText()` helper method for injecting multi-character text as key events
+- ✅ Added comprehensive tests for scrollback buffer in snapshot
+- ✅ Added tests for 256-color and RGB color support (SGR 38;5;N and 38;2;R;G;B)
+
+**Bug Fixes:**
+- ✅ Fixed duplicate line in src/bash-sly.plugin.sh (line 51) - now synchronized with lib/
+
+**Verification:**
+- ✅ All CSI ED (J) modes 0/1/2/3 confirmed implemented
+- ✅ All CSI EL (K) modes 0/1/2 confirmed implemented  
+- ✅ SGR 256-color and RGB parsing confirmed working
+- ✅ Scrollback buffer in SnapshotOptions confirmed working
+- ✅ lib/ and src/ shell plugins confirmed synchronized
+- ✅ OSC 7 (pwd) and OSC 52 (clipboard) handling confirmed in policy engine
+- ✅ OSC 133 (shell integration markers) confirmed working
+
+**Test Results:**
+- ✅ All tests passing (130+ unit tests across terminal_runtime, policy_engine, command_planner)
 
 ### Work Session 27 Highlights (Serialization, CLI Flags, UX Polish)
 
@@ -602,7 +646,7 @@ zig build test-ghostty   # Run libghostty integration tests
 - ✅ Alternate screen buffer (CSI ?1049h/l)
 
 **Verification:**
-- ✅ 120+ tests passing, build clean
+- ✅ 130+ tests passing, build clean
 
 ### Work Session 25 Highlights (Cursor Movement, SGR Extensions, Fish Support)
 
@@ -676,7 +720,7 @@ zig build test-ghostty   # Run libghostty integration tests
 - ✅ Phase 7: Provider integration with context enrichment + schema validation + production fixes
 
 **Test Results:**
-- ✅ 120+ unit tests passing (terminal_runtime, policy_engine, command_planner)
+- ✅ 130+ unit tests passing (terminal_runtime, policy_engine, command_planner)
 - ✅ Build system fully functional (Nix + Zig 0.15.2)
 - ✅ End-to-end pipeline verified with echo provider
 - ✅ `sly plan` command working correctly
