@@ -1,6 +1,14 @@
 .{
     .name = "sly",
     .description = "Shell AI command generator - convert natural language to shell commands",
+    .options = .{
+        .{
+            .short = 't',
+            .long = "timeout",
+            .type = "?u32",
+            .description = "Network timeout in seconds (default: 30)",
+        },
+    },
     .flags = .{
         .{
             .short = 'v',
@@ -30,6 +38,52 @@
                             .description = "Automatically add source line to shell rc file",
                         },
                     },
+                },
+            },
+        },
+        .{
+            .name = "feedbytes",
+            .description = "Process VT sequences and display terminal state (for testing)",
+            .options = .{
+                .{
+                    .long = "input",
+                    .type = "?string",
+                    .description = "VT sequence input (reads from stdin if omitted)",
+                },
+            },
+            .flags = .{
+                .{
+                    .short = 's',
+                    .long = "snapshot",
+                    .description = "Show snapshot hash and metadata",
+                },
+                .{
+                    .short = 'r',
+                    .long = "raw",
+                    .description = "Show raw framebuffer cells with styling",
+                },
+            },
+        },
+        .{
+            .name = "plan",
+            .description = "Generate a CommandPlan JSON schema from natural language (for shell integration)",
+            .options = .{
+                .{
+                    .long = "query",
+                    .type = "string",
+                    .description = "Natural language command query",
+                },
+                .{
+                    .long = "context",
+                    .type = "?string",
+                    .description = "Recent terminal output to provide context for AI (optional)",
+                },
+            },
+            .flags = .{
+                .{
+                    .short = 'p',
+                    .long = "pretty",
+                    .description = "Pretty-print the JSON output",
                 },
             },
         },

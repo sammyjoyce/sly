@@ -25,10 +25,19 @@ Shell AI command generator - convert natural language to shell commands using AI
 ```sh
 git clone https://codeberg.org/sam/sly.git
 cd sly/
+
+# Build sly (automatically builds libghostty-vt first)
 zig build -Doptimize=ReleaseSafe
 ```
 
 Binary will be at `zig-out/bin/sly`.
+
+**Note**: sly now integrates with [libghostty-vt](https://github.com/ghostty-org/ghostty) for terminal emulation. The build system automatically builds the library from `vendor/ghostty` before building sly.
+
+To manually build just libghostty-vt:
+```sh
+zig build lib-ghostty
+```
 
 ### Add to PATH
 
@@ -43,6 +52,14 @@ Add to `~/.bashrc` or `~/.zshrc` to persist.
 - Development shell: `nix develop`
 - Build the CLI: `nix build` or `nix build .#sly` (binary at `./result/bin/sly`)
 - Run directly: `nix run . -- "list all pdf files"` (or `nix run .#sly -- "list all pdf files"`)
+
+**Using direnv**: The project includes `.envrc` to automatically load the Nix development shell:
+
+```sh
+direnv allow   # Enable automatic shell loading
+```
+
+The dev shell provides Zig 0.15.2, pkg-config, curl, and other build dependencies.
 
 First build will error with a vendor hash for Zig dependencies. Copy the suggested `sha256-...` into `flake.nix` where `pkgs.lib.fakeHash` is used, then rebuild.
 

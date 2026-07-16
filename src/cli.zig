@@ -10,10 +10,25 @@ pub const ShellInstallArgs = struct {
     auto: bool = false,
 };
 
+pub const FeedbytesArgs = struct {
+    input: ?[]const u8 = null,
+    snapshot: bool = false,
+    raw: bool = false,
+};
+
+pub const PlanArgs = struct {
+    query: []const u8,
+    context: ?[]const u8 = null,
+    pretty: bool = false,
+    timeout_ms: u32 = 30000,
+};
+
 pub const Command = union(enum) {
     version,
     help,
     shell_install: ShellInstallArgs,
+    feedbytes: FeedbytesArgs,
+    plan: PlanArgs,
     query: []const u8,
 };
 
@@ -30,6 +45,13 @@ pub const ParseResult = struct {
             .query => |q| self.allocator.free(q),
             .shell_install => |install| {
                 if (install.shell) |s| self.allocator.free(s);
+            },
+            .feedbytes => |fb| {
+                if (fb.input) |i| self.allocator.free(i);
+            },
+            .plan => |plan| {
+                self.allocator.free(plan.query);
+                if (plan.context) |ctx| self.allocator.free(ctx);
             },
             else => {},
         }
@@ -50,6 +72,8 @@ pub fn parseArgs(allocator: std.mem.Allocator) !ParseResult {
     // Check if first argument suggests we should use argzon parsing
     const use_argzon = if (first_arg) |arg|
         std.mem.eql(u8, arg, "shell") or
+            std.mem.eql(u8, arg, "feedbytes") or
+            std.mem.eql(u8, arg, "plan") or
             std.mem.eql(u8, arg, "--version") or
             std.mem.eql(u8, arg, "-v") or
             std.mem.eql(u8, arg, "--help") or
@@ -94,6 +118,42 @@ pub fn parseArgs(allocator: std.mem.Allocator) !ParseResult {
                             };
                         },
                     }
+                },
+                .feedbytes => |fb_cmd| {
+                    var fb_args = FeedbytesArgs{
+                        .snapshot = fb_cmd.flags.snapshot,
+                        .raw = fb_cmd.flags.raw,
+                    };
+
+                    if (fb_cmd.options.input) |input_str| {
+                        fb_args.input = try allocator.dupe(u8, input_str);
+                    }
+
+                    return ParseResult{
+                        .command = .{ .feedbytes = fb_args },
+                        .args = args,
+                        .allocator = allocator,
+                    };
+                },
+                .plan => |plan_cmd| {
+                    var plan_args = PlanArgs{
+                        .query = try allocator.dupe(u8, plan_cmd.options.query),
+                        .pretty = plan_cmd.flags.pretty,
+                    };
+
+                    if (plan_cmd.options.context) |ctx| {
+                        plan_args.context = try allocator.dupe(u8, ctx);
+                    }
+
+                    if (args.options.timeout) |t| {
+                        plan_args.timeout_ms = t * 1000;
+                    }
+
+                    return ParseResult{
+                        .command = .{ .plan = plan_args },
+                        .args = args,
+                        .allocator = allocator,
+                    };
                 },
             }
         }

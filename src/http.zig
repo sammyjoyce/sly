@@ -1,18 +1,74 @@
+//! HTTP Client Module
+//!
+//! Lightweight HTTP client built on libcurl for making JSON API requests.
+//! Designed for AI provider communication in sly.
+//!
+//! ## Features
+//! - JSON POST requests with automatic Content-Type header
+//! - Configurable timeouts (connection + total request)
+//! - Custom header support for authorization/API keys
+//! - Streaming response body collection
+//!
+//! ## Memory Management
+//! Response bodies are allocated with the caller's allocator. The caller
+//! owns the returned `Response.body` slice and must free it when done.
+//!
+//! ## Error Handling
+//! - `error.Unavailable`: libcurl initialization failed
+//! - `error.Network`: Request failed (timeout, DNS, connection, etc.)
+//!
+//! ## Example
+//! ```zig
+//! const response = try http.postJson(
+//!     allocator,
+//!     "https://api.example.com/v1/chat",
+//!     &.{"Authorization: Bearer sk-xxx"},
+//!     "{\"prompt\": \"hello\"}",
+//! );
+//! defer allocator.free(response.body);
+//! ```
+
 const std = @import("std");
 const c = @cImport({
     @cInclude("curl/curl.h");
 });
 
+/// HTTP response from a completed request.
+///
+/// Contains the status code and response body. The caller owns the body
+/// memory and must free it with the same allocator used for the request.
 pub const Response = struct {
+    /// HTTP status code (e.g., 200, 404, 500).
+    /// Check this before processing the body - non-2xx codes indicate errors.
     status: u32,
+
+    /// Response body bytes (typically JSON for API responses).
+    /// Caller owns this memory and must free with the same allocator.
+    /// Empty slice if the server returned no body.
     body: []u8,
 };
 
+/// Errors that can occur during HTTP operations.
+pub const HttpError = error{
+    /// libcurl initialization failed. Typically indicates curl is not
+    /// available or system resources are exhausted.
+    Unavailable,
+
+    /// Network operation failed. Could be DNS resolution, connection
+    /// refused, timeout, TLS handshake failure, etc.
+    Network,
+
+    /// Memory allocation failed.
+    OutOfMemory,
+};
+
+/// Internal context for libcurl write callback.
 const WriteCtx = struct {
     buf: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
 };
 
+/// libcurl write callback - collects response body bytes.
 fn writeCb(ptr: ?*const anyopaque, size: usize, nmemb: usize, userp: ?*anyopaque) callconv(.c) usize {
     if (ptr == null or userp == null) return 0;
     const total: usize = size * nmemb;
@@ -24,16 +80,78 @@ fn writeCb(ptr: ?*const anyopaque, size: usize, nmemb: usize, userp: ?*anyopaque
     return total;
 }
 
+/// Append a header string to a curl slist.
 fn slistAppend(head: ?*c.struct_curl_slist, s: []const u8) ?*c.struct_curl_slist {
     const z = std.heap.c_allocator.dupeZ(u8, s) catch return head;
     return c.curl_slist_append(head, @ptrCast(z));
 }
 
+/// Calculate connection timeout from total timeout.
+///
+/// Connection timeout is set to half of the total timeout, capped at 10 seconds.
+/// This ensures connection attempts don't consume the entire timeout budget.
+pub fn calculateConnectTimeout(timeout_ms: u32) u32 {
+    return @min(timeout_ms / 2, 10000);
+}
+
+/// Sends a POST request with JSON content type and a 30-second timeout.
+///
+/// Convenience wrapper around `postJsonWithTimeout` with a 30-second default.
+/// Suitable for most AI API calls.
+///
+/// ## Parameters
+/// - `allocator`: Allocator for response body and temporary buffers.
+/// - `url`: Full URL including scheme (e.g., "https://api.openai.com/v1/chat").
+/// - `headers`: Additional headers (e.g., `&.{"Authorization: Bearer sk-xxx"}`).
+///   Content-Type is added automatically.
+/// - `body`: Request body bytes (typically JSON-encoded).
+///
+/// ## Returns
+/// `Response` with status code and body. Caller owns `response.body`.
+///
+/// ## Errors
+/// - `error.Unavailable`: libcurl failed to initialize
+/// - `error.Network`: Request failed (timeout, DNS, TLS, etc.)
+/// - `error.OutOfMemory`: Allocation failed
 pub fn postJson(
     allocator: std.mem.Allocator,
     url: []const u8,
     headers: []const []const u8,
     body: []const u8,
+) !Response {
+    return postJsonWithTimeout(allocator, url, headers, body, 30000);
+}
+
+/// Sends a POST request with JSON content type and configurable timeout.
+///
+/// Low-level function for JSON POST requests with full timeout control.
+/// The `Content-Type: application/json` header is added automatically.
+///
+/// ## Parameters
+/// - `allocator`: Allocator for response body and temporary buffers.
+/// - `url`: Full URL including scheme.
+/// - `headers`: Additional headers. Content-Type is added automatically.
+/// - `body`: Request body bytes (typically JSON-encoded).
+/// - `timeout_ms`: Total request timeout in milliseconds. Connection timeout
+///   is set to half this value, capped at 10 seconds.
+///
+/// ## Returns
+/// `Response` with status code and body. Caller owns `response.body`.
+///
+/// ## Errors
+/// - `error.Unavailable`: libcurl failed to initialize
+/// - `error.Network`: Request failed (timeout, DNS, TLS, etc.)
+/// - `error.OutOfMemory`: Allocation failed
+///
+/// ## Memory Management
+/// The returned `Response.body` is allocated with `allocator`. The caller
+/// must free it when done: `allocator.free(response.body)`.
+pub fn postJsonWithTimeout(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    headers: []const []const u8,
+    body: []const u8,
+    timeout_ms: u32,
 ) !Response {
     var out: std.ArrayList(u8) = .{};
     errdefer out.deinit(allocator);
@@ -60,8 +178,9 @@ pub fn postJson(
     _ = c.curl_easy_setopt(eh, c.CURLOPT_HTTPHEADER, list);
 
     // Set timeouts
-    _ = c.curl_easy_setopt(eh, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, 5000));
-    _ = c.curl_easy_setopt(eh, c.CURLOPT_TIMEOUT_MS, @as(c_long, 15000));
+    const connect_timeout = calculateConnectTimeout(timeout_ms);
+    _ = c.curl_easy_setopt(eh, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(connect_timeout)));
+    _ = c.curl_easy_setopt(eh, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(timeout_ms)));
 
     // Set write callback
     var ctx = WriteCtx{ .buf = &out, .allocator = allocator };
@@ -80,4 +199,44 @@ pub fn postJson(
         .status = @intCast(code_long),
         .body = try out.toOwnedSlice(allocator),
     };
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+
+test "calculateConnectTimeout - basic cases" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u32, 5000), calculateConnectTimeout(10000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(30000)); // capped at 10000
+    try testing.expectEqual(@as(u32, 0), calculateConnectTimeout(0));
+    try testing.expectEqual(@as(u32, 1), calculateConnectTimeout(2));
+}
+
+test "calculateConnectTimeout - capped at 10 seconds" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(30000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(60000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(120000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(std.math.maxInt(u32)));
+}
+
+test "calculateConnectTimeout - boundary at 20 seconds" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u32, 9999), calculateConnectTimeout(19998));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(20000));
+    try testing.expectEqual(@as(u32, 10000), calculateConnectTimeout(20002));
+}
+
+test "Response struct layout" {
+    const testing = std.testing;
+
+    var body = [_]u8{ 'O', 'K' };
+    const resp = Response{ .status = 200, .body = &body };
+
+    try testing.expectEqual(@as(u32, 200), resp.status);
+    try testing.expectEqualStrings("OK", resp.body);
 }
