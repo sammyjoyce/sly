@@ -148,7 +148,7 @@ __sly_expand() {
       # Use jq if available, otherwise fall back to simple grep/sed extraction
       if command -v jq >/dev/null 2>&1; then
         # Validate that .command exists
-        if ! echo "$plan_json" | jq -e '.command' >/dev/null 2>&1; then
+        if ! printf '%s\n' "$plan_json" | jq -e '.command' >/dev/null 2>&1; then
           if [[ "${SLY_COLOR:-1}" -eq 1 ]]; then
             printf '\e[31m%s\e[0m\n' "Invalid response: missing command field"
           else
@@ -159,7 +159,7 @@ __sly_expand() {
           return 0
         fi
         # Parse with jq for robust JSON parsing
-        cmd="$(echo "$plan_json" | jq -r '[.command, (.args // [])[]] | join(" ")' 2>/dev/null)"
+        cmd="$(printf '%s\n' "$plan_json" | jq -r '.command as $cmd | [$cmd, ((.args // [])[] | @sh)] | join(" ")' 2>/dev/null)"
       else
         # Fallback: simple extraction (less robust but no dependencies)
         # Extract "command": "value" and "args": ["a", "b"]

@@ -167,7 +167,7 @@ function __sly_expand
         
         if command -v jq >/dev/null 2>&1
             # Validate that .command exists
-            if not echo $plan_json | jq -e '.command' >/dev/null 2>&1
+            if not printf '%s\n' "$plan_json" | jq -e '.command' >/dev/null 2>&1
                 if test "$SLY_COLOR" != "0"
                     set_color red
                     echo "❌ Invalid response: missing command field"
@@ -179,7 +179,7 @@ function __sly_expand
                 return
             end
             # Parse with jq
-            set cmd (echo $plan_json | jq -r '[.command, (.args // [])[]] | join(" ")' 2>/dev/null)
+            set cmd (printf '%s\n' "$plan_json" | jq -r '.command as $cmd | [$cmd, ((.args // [])[] | @sh)] | join(" ")' 2>/dev/null)
         else
             # Fallback: simple extraction using string manipulation
             set -l base_cmd (echo $plan_json | string match -r '"command"\s*:\s*"([^"]*)"' | head -2 | tail -1)
